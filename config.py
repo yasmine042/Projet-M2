@@ -1,0 +1,43 @@
+"""
+Configuration centrale du projet — Détection d'anomalies de vols.
+Modifiez uniquement les valeurs marquées 'à adapter'.
+"""
+
+# ─── Connexion SQL Server ──────────────────────────────────────────────────────
+DB_CONFIG = {
+    "server":             "DESKTOP-JC4TRUJ",
+    "database":           "TALEXPDWH",
+    "driver":             "ODBC Driver 17 for SQL Server",
+    "trusted_connection": "yes",
+}
+
+# ─── Tables source (ne pas modifier) ──────────────────────────────────────────
+TABLE_AIMS         = "AIMS"
+TABLE_MRO          = "MRO"
+TABLE_VOLS_VALIDES = "VolsValidesEtape1"   # données d'entraînement
+
+# ─── Tables résultantes créées automatiquement ────────────────────────────────
+TABLE_ANOMALIES_AIMS = "AnomaliesAIMS"
+TABLE_ANOMALIES_MRO  = "AnomaliesMRO"
+
+# ─── Isolation Forest ─────────────────────────────────────────────────────────
+IF_CONFIG = {
+    "n_estimators": 200,    # nombre d'arbres — augmenter si résultats instables
+    "contamination": 0.06,  # 6% de vols attendus comme anomalies — à adapter
+    "random_state":  42,    # ne pas changer — garantit la reproductibilité
+    "max_samples":  "auto", # ne pas changer
+}
+
+# ─── Les 5 features de validation (définies par le promoteur) ─────────────────
+FEATURES = [
+    "NumVolNum",       # NumVol     → extraction entière   ex: "1010"     → 1010
+    "MatriculeCode",   # Matricule  → LabelEncoder         ex: "7T-VCA"   → 42
+    "DateOrdinal",     # Date       → ordinal              ex: 21/01/2019 → 736715
+    "AeroDepartCode",  # AeroDepart → LabelEncoder         ex: "ALG"      → 0
+    "AeroArrivCode",   # AeroArriv  → LabelEncoder         ex: "HME"      → 7
+]
+
+# ─── Chemins de sauvegarde ────────────────────────────────────────────────────
+MODEL_PATH   = "models/isolation_forest.pkl"
+ENCODER_PATH = "models/label_encoders.pkl"
+LOG_PATH     = "logs/pipeline.log"
