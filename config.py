@@ -5,10 +5,11 @@ Modifiez uniquement les valeurs marquées 'à adapter'.
 
 # ─── Connexion SQL Server ──────────────────────────────────────────────────────
 DB_CONFIG = {
-    "server":             "DESKTOP-JC4TRUJ",
+    "server":             "DESKTOP-GH5U4JQ",
     "database":           "TALEXPDWH",
     "driver":             "ODBC Driver 17 for SQL Server",
     "trusted_connection": "yes",
+    "novelty":       True,  
 }
 
 # ─── Tables source (ne pas modifier) ──────────────────────────────────────────
@@ -36,7 +37,13 @@ FEATURES = [
     "AeroDepartCode",  # AeroDepart → LabelEncoder         ex: "ALG"      → 0
     "AeroArrivCode",   # AeroArriv  → LabelEncoder         ex: "HME"      → 7
 ]
-
+# ─── Features d'anomalie métier (invisibles au SSIS) ─────────────────────────
+FEATURES_ANOMALIES = [
+    "DureeVolMin",     # ATA - ATD en minutes  → durée de vol anormale ?
+    "RetardDepartMin", # ATD - ETD en minutes  → retard départ anormal ?
+    "RetardArrivMin",  # ATA - ETA en minutes  → retard arrivée anormal ?
+    "BlockMin",        # bh_h*60 + bh_m        → temps bloc anormal ?
+]
 # ─── Chemins de sauvegarde ────────────────────────────────────────────────────
 MODEL_PATH   = "models/isolation_forest.pkl"
 ENCODER_PATH = "models/label_encoders.pkl"
