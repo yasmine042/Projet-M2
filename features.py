@@ -33,6 +33,7 @@ def normalize_mro(df):
 def normalize_vols_valides(df):
     df = df.copy()
     df["Matricule"]  = df["MatriculeAIMS"].astype(str).str.strip().str.upper()
+    df = df[df["Matricule"].str.len() == 6]
     df["NumVol"]     = df["NumVolAIMS"].astype(str).str.strip().str.upper()
     df["AeroDepart"] = df["AeroDepartAIMS"].astype(str).str.strip().str.upper()
     df["AeroArriv"]  = df["AeroArrivAIMS"].astype(str).str.strip().str.upper()
