@@ -23,6 +23,13 @@ def read_table(table):
     logger.info(f"Table '{table}' : {len(df)} lignes.")
     return df
 
+def read_query(sql):
+    engine = get_engine()
+    with engine.connect() as conn:
+        df = pd.read_sql(sql, conn)
+    logger.info(f"Requete : {len(df)} lignes.")
+    return df
+
 def write_table(df, table, if_exists="replace"):
     engine = get_engine()
     df.to_sql(table, engine, if_exists=if_exists, index=False)

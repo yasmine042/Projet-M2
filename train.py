@@ -3,6 +3,7 @@ import os
 import pickle
 import logging
 from sklearn.ensemble import IsolationForest
+from sklearn.model_selection import train_test_split
 from config import IF_CONFIG, MODEL_PATH, ENCODER_PATH
 from db import read_table
 from features import FlightFeatureEncoder, normalize_vols_valides
@@ -24,13 +25,17 @@ def train():
     X       = encoder.fit_transform(df)
     logger.info(f"  Matrice : {X.shape[0]} lignes x {X.shape[1]} features.")
 
-    # ── 3. Entrainer l'Isolation Forest ───────────────────────────────────
+    # ── 3. Split 80/20 ────────────────────────────────────────────────────
+    X_train, X_test = train_test_split(X, test_size=0.2, random_state=42)
+    logger.info(f"  Train : {len(X_train)} vols  |  Test : {len(X_test)} vols")
+
+    # ── 4. Entrainer l'Isolation Forest ───────────────────────────────────
     logger.info("Entrainement Isolation Forest...")
     model = IsolationForest(**IF_CONFIG)
-    model.fit(X)
+    model.fit(X_train)
     logger.info("  Modele entraine.")
 
-    # ── 4. Sauvegarder ────────────────────────────────────────────────────
+    # ── 5. Sauvegarder ────────────────────────────────────────────────────
     os.makedirs("models", exist_ok=True)
 
     with open(MODEL_PATH, "wb") as f:
@@ -39,20 +44,26 @@ def train():
 
     encoder.save()
 
-    # ── 5. Apercu des resultats sur les donnees d'entrainement ────────────
-    predictions = model.predict(X)
-    scores      = model.score_samples(X)
-    n_anomalies = (predictions == -1).sum()
+    # ── 6. Evaluation sur le test set (vols valides non vus) ──────────────
+    pred_train  = model.predict(X_train)
+    pred_test   = model.predict(X_test)
+    scores_test = model.score_samples(X_test)
 
-    print("\n" + "=" * 45)
+    fp_train = (pred_train == -1).sum()
+    fp_test  = (pred_test  == -1).sum()
+
+    print("\n" + "=" * 50)
     print("RESULTAT ENTRAINEMENT")
-    print("=" * 45)
-    print(f"  Vols utilises pour entrainement : {len(X)}")
-    print(f"  Anomalies detectees sur train   : {n_anomalies} ({n_anomalies/len(X)*100:.1f}%)")
-    print(f"  Score moyen                     : {scores.mean():.4f}")
-    print(f"  Score minimum (plus suspect)    : {scores.min():.4f}")
-    print(f"  Score maximum (plus normal)     : {scores.max():.4f}")
-    print("=" * 45)
+    print("=" * 50)
+    print(f"  Vols train                        : {len(X_train)}")
+    print(f"  Vols test  (non vus)              : {len(X_test)}")
+    print(f"  Faux positifs sur train           : {fp_train} ({fp_train/len(X_train)*100:.1f}%)")
+    print(f"  Faux positifs sur test            : {fp_test}  ({fp_test/len(X_test)*100:.1f}%)")
+    print(f"    → attendu ~{IF_CONFIG['contamination']*100:.0f}%  (= contamination)")
+    print(f"  Score moyen test                  : {scores_test.mean():.4f}")
+    print(f"  Score min  test (plus suspect)    : {scores_test.min():.4f}")
+    print(f"  Score max  test (plus normal)     : {scores_test.max():.4f}")
+    print("=" * 50)
     print(f"\nModele pret : {MODEL_PATH}")
     print(f"Encodeur pret : {ENCODER_PATH}")
 

@@ -9,7 +9,6 @@ DB_CONFIG = {
     "database":           "TALEXPDWH",
     "driver":             "ODBC Driver 17 for SQL Server",
     "trusted_connection": "yes",
-    "novelty":       True,  
 }
 
 # ─── Tables source (ne pas modifier) ──────────────────────────────────────────
@@ -23,8 +22,8 @@ TABLE_ANOMALIES_MRO  = "AnomaliesMRO"
 
 # ─── Isolation Forest ─────────────────────────────────────────────────────────
 IF_CONFIG = {
-    "n_estimators": 200,    # nombre d'arbres — augmenter si résultats instables
-    "contamination": 0.06,  # 6% de vols attendus comme anomalies — à adapter
+    "n_estimators": 200,    # nombre d'arbres — augmenter si résultats instables  , lorsqu on augmente la vitesse diminue, lorsqu on diminue la vitesse auugmente mais n'est pas bien entrainé 
+    "contamination": 0.05,  # 5% de vols attendus comme anomalies — d apres calcul de vols invalides depuis aims 
     "random_state":  42,    # ne pas changer — garantit la reproductibilité
     "max_samples":  "auto", # ne pas changer
 }
@@ -33,7 +32,7 @@ IF_CONFIG = {
 FEATURES = [
     "NumVolNum",       # NumVol     → extraction entière   ex: "1010"     → 1010
     "MatriculeCode",   # Matricule  → LabelEncoder         ex: "7T-VCA"   → 42
-    "DateOrdinal",     # Date       → ordinal              ex: 21/01/2019 → 736715
+    "DateJour",        # Date       → dayofweek             ex: 21/01/2019 → 0 (Lundi)
     "AeroDepartCode",  # AeroDepart → LabelEncoder         ex: "ALG"      → 0
     "AeroArrivCode",   # AeroArriv  → LabelEncoder         ex: "HME"      → 7
 ]
