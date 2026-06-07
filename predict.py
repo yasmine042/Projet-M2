@@ -231,16 +231,33 @@ def analyser_raison_anomalie(df_volsvalides, row, score, seuil_tres):
         raisons.append(f"Score IF très bas ({score:.4f}) — combinaison très atypique")
 
     if not raisons:
-        freq = len(df_volsvalides[
+        jour = pd.to_datetime(dat).dayofweek if pd.notna(dat) else None
+
+        freq_sans_jour = len(df_volsvalides[
             (df_volsvalides["NumVol"]     == nv) &
             (df_volsvalides["AeroDepart"] == dep) &
             (df_volsvalides["AeroArriv"]  == arr) &
             (df_volsvalides["Matricule"]  == mat)
         ])
-        if freq > 0:
+
+        freq_avec_jour = len(df_volsvalides[
+            (df_volsvalides["NumVol"]     == nv) &
+            (df_volsvalides["AeroDepart"] == dep) &
+            (df_volsvalides["AeroArriv"]  == arr) &
+            (df_volsvalides["Matricule"]  == mat) &
+            (pd.to_datetime(df_volsvalides["Date"]).dt.dayofweek == jour)
+        ]) if jour is not None else freq_sans_jour
+
+        if freq_avec_jour > 0:
             raisons.append(
                 f"Score IF légèrement anormal ({score:.4f}) — "
-                f"combinaison connue ({freq} fois dans vols valides) — possible faux positif"
+                f"combinaison connue ce jour ({freq_avec_jour} fois dans vols valides) — possible faux positif"
+            )
+        elif freq_sans_jour > 0:
+            jours_noms = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"]
+            raisons.append(
+                f"Vol {nv} {dep}→{arr} mat:{mat} connu ({freq_sans_jour} fois) "
+                f"mais jamais opéré le {jours_noms[jour]} (score:{score:.4f})"
             )
         else:
             raisons.append(
