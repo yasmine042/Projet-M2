@@ -542,9 +542,6 @@ def run():
     })
     write_table(norm_mro, "VoisNormalesMRO")
 
-    vols_manquants = pd.concat([manquants_aims, manquants_mro], ignore_index=True)
-    write_table(vols_manquants, "VolsManquantsIF")
-
     # ── 8. Résumé ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 55)
     print("  RÉSULTATS DÉTECTION ANOMALIES")
@@ -558,21 +555,20 @@ def run():
     print(f"    ⚠ Suspects (IF)        : {(anom_aims['Statut'] == 'Suspect').sum() - n_incomp_aims}")
     print(f"    ✗ Très Suspects (IF)   : {(anom_aims['Statut'] == 'Très Suspect').sum()}")
     print(f"    ✗ Données incomplètes  : {n_incomp_aims}")
-    print(f"    ✈ Vols manquants       : {len(manquants_aims)}")
+
 
     print(f"\n  MRO ({n_mro_total} vols non matchés) :")
     print(f"    ✓ Normaux (IF)         : {len(norm_mro)}")
     print(f"    ⚠ Suspects (IF)        : {(anom_mro['Statut'] == 'Suspect').sum() - n_incomp_mro}")
     print(f"    ✗ Très Suspects (IF)   : {(anom_mro['Statut'] == 'Très Suspect').sum()}")
     print(f"    ✗ Données incomplètes  : {n_incomp_mro}")
-    print(f"    ✈ Vols manquants       : {len(manquants_mro)}")
+
 
     print("\n  Tables créées dans SQL Server :")
     print(f"    → AnomaliesAIMS     ({len(anom_aims)} lignes)")
     print(f"    → AnomaliesMRO      ({len(anom_mro)} lignes)")
     print(f"    → VoisNormalesAIMS  ({len(norm_aims)} lignes)")
     print(f"    → VoisNormalesMRO   ({len(norm_mro)} lignes)")
-    print(f"    → VolsManquantsIF   ({len(vols_manquants)} lignes)")
     print("=" * 55)
 
 
