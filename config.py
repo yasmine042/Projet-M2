@@ -5,7 +5,7 @@ Modifiez uniquement les valeurs marquées 'à adapter'.
 
 # ─── Connexion SQL Server ──────────────────────────────────────────────────────
 DB_CONFIG = {
-    "server":             "DESKTOP-GH5U4JQ",
+    "server":             "DESKTOP-JC4TRUJ",
     "database":           "TALEXPDWH",
     "driver":             "ODBC Driver 17 for SQL Server",
     "trusted_connection": "yes",
@@ -23,7 +23,7 @@ TABLE_ANOMALIES_MRO  = "AnomaliesMRO"
 # ─── Isolation Forest ─────────────────────────────────────────────────────────
 IF_CONFIG = {
     "n_estimators": 200,    # nombre d'arbres — augmenter si résultats instables  , lorsqu on augmente la vitesse diminue, lorsqu on diminue la vitesse auugmente mais n'est pas bien entrainé 
-    "contamination": 0.05,  # 5% de vols attendus comme anomalies — d apres calcul de vols invalides depuis aims 
+    "contamination": 0.05,  # 3% de vols attendus comme anomalies — d apres calcul de vols invalides depuis aims 
     "random_state":  42,    # ne pas changer — garantit la reproductibilité
     "max_samples":  "auto", # ne pas changer
 }
