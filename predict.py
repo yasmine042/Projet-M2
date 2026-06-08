@@ -402,10 +402,51 @@ def run():
         "DateAIMS":       "Date",
     }).copy()
     df_enc["Date"] = pd.to_datetime(df_enc["Date"], errors="coerce")
-    df_enc = df_enc.dropna(
-        subset=["Date", "Matricule", "NumVol", "AeroDepart", "AeroArriv"]
+
+    # ── 2b. Isoler les vols avec champs vides → anomalie directe, pas IF ─────
+    def est_vide(s):
+        return s.isna() | (s.astype(str).str.strip() == "")
+
+    masque_incomplet = (
+        df_enc["Date"].isna()            |
+        est_vide(df_enc["Matricule"])    |
+        est_vide(df_enc["NumVol"])       |
+        est_vide(df_enc["AeroDepart"])   |
+        est_vide(df_enc["AeroArriv"])
     )
-    df_nm = df_nm.loc[df_enc.index]  # alignement
+
+    idx_incomplets = df_enc[masque_incomplet].index
+    idx_complets   = df_enc[~masque_incomplet].index
+
+    # Construire la raison pour chaque vol incomplet
+    champs_verif = [
+        ("MatriculeAIMS",  "Matricule"),
+        ("NumVolAIMS",     "NumVol"),
+        ("AeroDepartAIMS", "AéroDepart"),
+        ("AeroArrivAIMS",  "AéroArriv"),
+        ("DateAIMS",       "Date"),
+    ]
+    df_incomplets = df_nm.loc[idx_incomplets].copy()
+    df_incomplets["ScoreAnomalie"] = -1.0
+    df_incomplets["Statut"]        = "Suspect"
+    df_incomplets["RaisonAnomalie"] = df_incomplets.apply(
+        lambda r: "Données incomplètes : " + ", ".join([
+            label + " vide"
+            for orig, label in champs_verif
+            if pd.isna(r.get(orig)) or str(r.get(orig, "")).strip() == ""
+        ]),
+        axis=1,
+    )
+    n_incomplets = len(df_incomplets)
+    if n_incomplets:
+        logger.warning(
+            f"  {n_incomplets} vols avec champs vides "
+            f"→ flaggés Suspect directement (non scorés par IF)."
+        )
+
+    # Passer uniquement les vols complets dans l'IF
+    df_enc = df_enc.loc[idx_complets].reset_index(drop=True)
+    df_nm  = df_nm.loc[idx_complets].reset_index(drop=True)
 
     # ── 3. Isolation Forest ───────────────────────────────────────────────────
     logger.info("─" * 50)
@@ -434,13 +475,23 @@ def run():
     df_result["TypeAnomalie"]   = types
     df_result["RaisonAnomalie"] = raisons
 
-    anom = df_result[df_result["Statut"] != "Normal"].copy()
+    anom    = df_result[df_result["Statut"] != "Normal"].copy()
+    normaux = df_result[df_result["Statut"] == "Normal"].copy()
+
+    # Fusionner les anomalies IF avec les vols incomplets détectés avant IF
+    if not df_incomplets.empty:
+        anom = pd.concat([anom, df_incomplets], ignore_index=True)
 
     anom_aims = anom[anom["source_table"] == "AIMS"].drop(columns=["source_table"])
     anom_mro  = anom[anom["source_table"] == "MRO"].drop(columns=["source_table"])
-    
-    n_aims_total = (df_result["source_table"] == "AIMS").sum()
-    n_mro_total  = (df_result["source_table"] == "MRO").sum()
+
+    norm_aims = normaux[normaux["source_table"] == "AIMS"].drop(columns=["source_table"])
+    norm_mro  = normaux[normaux["source_table"] == "MRO"].drop(columns=["source_table"])
+
+    n_aims_total = (df_result["source_table"] == "AIMS").sum() + \
+                   (df_incomplets["source_table"] == "AIMS").sum()
+    n_mro_total  = (df_result["source_table"] == "MRO").sum() + \
+                   (df_incomplets["source_table"] == "MRO").sum()
 
     logger.info(f"  AIMS non matches scorés : {n_aims_total}  →  suspects : {len(anom_aims)}")
     logger.info(f"  MRO  non matches scorés : {n_mro_total}   →  suspects : {len(anom_mro)}")
@@ -476,40 +527,52 @@ def run():
         "AeroArrivAIMS":  "AeroArrivMRO",
         "DateAIMS":       "DateMRO",
     })
-    write_table(anom_mro,    "AnomaliesMRO")
+    write_table(anom_mro, "AnomaliesMRO")
 
-    write_table(valides_aims, "VolsValidesIF_AIMS")
+    # Vols non matchés classés NORMAUX par IF (predict == 1)
+    write_table(norm_aims, "VoisNormalesAIMS")
 
-    valides_mro = valides_mro.rename(columns={
-        "IDAIMS":         "IDMRO",
-        "MatriculeAIMS":  "MatriculeMRO",
-        "NumVolAIMS":     "NumVolMRO",
-        "AeroDepartAIMS": "AeroDepartMRO",
-        "AeroArrivAIMS":  "AeroArrivMRO",
-        "DateAIMS":       "DateMRO",
+    norm_mro = norm_mro.rename(columns={
+        "IDAIMS":        "IDMRO",
+        "MatriculeAIMS": "MatriculeMRO",
+        "NumVolAIMS":    "NumVolMRO",
+        "AeroDepartAIMS":"AeroDepartMRO",
+        "AeroArrivAIMS": "AeroArrivMRO",
+        "DateAIMS":      "DateMRO",
     })
-    write_table(valides_mro, "VolsValidesIF_MRO")
+    write_table(norm_mro, "VoisNormalesMRO")
+
+    vols_manquants = pd.concat([manquants_aims, manquants_mro], ignore_index=True)
+    write_table(vols_manquants, "VolsManquantsIF")
 
     # ── 8. Résumé ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 55)
     print("  RÉSULTATS DÉTECTION ANOMALIES")
     print("=" * 55)
 
+    n_incomp_aims = (df_incomplets["source_table"] == "AIMS").sum()
+    n_incomp_mro  = (df_incomplets["source_table"] == "MRO").sum()
+
     print(f"\n  AIMS ({n_aims_total} vols non matchés) :")
-    print(f"    ⚠ Suspects       : {(anom_aims['Statut'] == 'Suspect').sum()}")
-    print(f"    ✗ Très Suspects  : {(anom_aims['Statut'] == 'Très Suspect').sum()}")
+    print(f"    ✓ Normaux (IF)         : {len(norm_aims)}")
+    print(f"    ⚠ Suspects (IF)        : {(anom_aims['Statut'] == 'Suspect').sum() - n_incomp_aims}")
+    print(f"    ✗ Très Suspects (IF)   : {(anom_aims['Statut'] == 'Très Suspect').sum()}")
+    print(f"    ✗ Données incomplètes  : {n_incomp_aims}")
+    print(f"    ✈ Vols manquants       : {len(manquants_aims)}")
 
     print(f"\n  MRO ({n_mro_total} vols non matchés) :")
-    print(f"    ⚠ Suspects       : {(anom_mro['Statut'] == 'Suspect').sum()}")
-    print(f"    ✗ Très Suspects  : {(anom_mro['Statut'] == 'Très Suspect').sum()}")
-
+    print(f"    ✓ Normaux (IF)         : {len(norm_mro)}")
+    print(f"    ⚠ Suspects (IF)        : {(anom_mro['Statut'] == 'Suspect').sum() - n_incomp_mro}")
+    print(f"    ✗ Très Suspects (IF)   : {(anom_mro['Statut'] == 'Très Suspect').sum()}")
+    print(f"    ✗ Données incomplètes  : {n_incomp_mro}")
+    print(f"    ✈ Vols manquants       : {len(manquants_mro)}")
 
     print("\n  Tables créées dans SQL Server :")
-    print(f"    → AnomaliesAIMS            ({len(anom_aims)} lignes)")
-    print(f"    → AnomaliesMRO             ({len(anom_mro)} lignes)")
-    print(f"    → VolsValidesIF_AIMS ({n_valides_aims} lignes)")
-    print(f"    → VolsValidesIF_MRO  ({n_valides_mro} lignes)")
-
+    print(f"    → AnomaliesAIMS     ({len(anom_aims)} lignes)")
+    print(f"    → AnomaliesMRO      ({len(anom_mro)} lignes)")
+    print(f"    → VoisNormalesAIMS  ({len(norm_aims)} lignes)")
+    print(f"    → VoisNormalesMRO   ({len(norm_mro)} lignes)")
+    print(f"    → VolsManquantsIF   ({len(vols_manquants)} lignes)")
     print("=" * 55)
 
 
