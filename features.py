@@ -7,6 +7,27 @@ from config import ENCODER_PATH
 
 logger = logging.getLogger(__name__)
 
+# ─── Familles d'appareils (fleet types) ───────────────────────────────────────
+
+FLEET_FAMILIES = {
+    # Famille 1
+    "7T-VCA": 1, "7T-VCB": 1, "7T-VCC": 1, "7T-VCD": 1,
+    "7T-VCE": 1, "7T-VCF": 1, "7T-VCT": 1,
+    # Famille 2
+    "7T-VCP": 2, "7T-VCQ": 2, "7T-VCR": 2, "7T-VCS": 2,
+    # Famille 3
+    "7T-VCL": 3, "7T-VCM": 3, "7T-VCN": 3, "7T-VCO": 3,
+}
+
+def get_fleet_family(matricule: str) -> int:
+    """Retourne la famille (1, 2, 3) ou 0 si matricule inconnu."""
+    return FLEET_FAMILIES.get(str(matricule).strip().upper(), 0)
+
+def same_fleet_family(mat1: str, mat2: str) -> bool:
+    """True si les deux matricules appartiennent à la même famille connue."""
+    f1, f2 = get_fleet_family(mat1), get_fleet_family(mat2)
+    return f1 != 0 and f1 == f2
+
 # ─── Normalisation ────────────────────────────────────────────────────────────
 
 def normalize_aims(df):
@@ -44,14 +65,20 @@ def normalize_vols_valides(df):
 
 class FlightFeatureEncoder:
     """
-    Transforme les 5 colonnes en nombres pour l'Isolation Forest.
+    Transforme les colonnes en features numériques pour l'Isolation Forest.
 
-    Colonne      Méthode           Exemple
-    NumVol     → extraction int   "1010"      → 1010
-    Matricule  → LabelEncoder     "7T-VCA"    → 42
-    Date       → dayofweek        21/01/2019  → 0 (Lundi)
-    AeroDepart → LabelEncoder     "ALG"       → 0
-    AeroArriv  → LabelEncoder     "HME"       → 7
+    Colonne         Méthode             Exemple
+    NumVol        → extraction int      "1010"     → 1010
+    Matricule     → LabelEncoder        "7T-VCA"   → 42
+    FleetFamily   → int (1/2/3/0)       "7T-VCA"   → 1
+    Date          → dayofweek           21/01/2019 → 0 (Lundi)
+    AeroDepart    → LabelEncoder        "ALG"      → 0
+    AeroArriv     → LabelEncoder        "HME"      → 7
+
+    FleetFamily encode la famille d'appareils à la place du matricule brut
+    pour que deux appareils de la même famille ne se pénalisent pas mutuellement.
+    Les deux features (MatriculeCode + FleetFamilyCode) sont conservées :
+    FleetFamily apporte le contexte flotte, MatriculeCode garde la granularité fine.
     """
 
     def __init__(self):
@@ -69,6 +96,9 @@ class FlightFeatureEncoder:
             lambda x: int(le.transform([x])[0]) if x in known else -1
         )
 
+    def _fleet_family_encode(self, series):
+        return series.astype(str).apply(get_fleet_family)
+
     def fit(self, df):
         for col in ["Matricule", "AeroDepart", "AeroArriv"]:
             le = LabelEncoder()
@@ -83,13 +113,14 @@ class FlightFeatureEncoder:
         if not self._fitted:
             raise RuntimeError("Appelez .fit() avant .transform()")
         result = pd.DataFrame(index=df.index)
-        result["NumVolNum"]      = self._numvol_to_int(df["NumVol"])
-        result["MatriculeCode"]  = self._label_encode("Matricule",  df["Matricule"])
-        result["DateJour"]       = df["Date"].apply(
+        result["NumVolNum"]       = self._numvol_to_int(df["NumVol"])
+        result["MatriculeCode"]   = self._label_encode("Matricule", df["Matricule"])
+        result["FleetFamilyCode"] = self._fleet_family_encode(df["Matricule"])
+        result["DateJour"]        = df["Date"].apply(
             lambda d: d.dayofweek if pd.notna(d) else -1
         )
-        result["AeroDepartCode"] = self._label_encode("AeroDepart", df["AeroDepart"])
-        result["AeroArrivCode"]  = self._label_encode("AeroArriv",  df["AeroArriv"])
+        result["AeroDepartCode"]  = self._label_encode("AeroDepart", df["AeroDepart"])
+        result["AeroArrivCode"]   = self._label_encode("AeroArriv",  df["AeroArriv"])
         return result.values.astype(float)
 
     def fit_transform(self, df):
@@ -122,6 +153,12 @@ if __name__ == "__main__":
     X   = enc.fit_transform(df)
 
     print(f"  Lignes encodees  : {X.shape[0]}")
-    print(f"  Nombre features  : {X.shape[1]}")
+    print(f"  Nombre features  : {X.shape[1]}  (6 : NumVol, Matricule, FleetFamily, Jour, Depart, Arrivee)")
     print(f"  Exemple ligne 0  : {X[0]}")
+
+    # Test familles
+    print("\n  Test familles :")
+    print(f"    7T-VCA vs 7T-VCB  → même famille : {same_fleet_family('7T-VCA', '7T-VCB')}")   # True
+    print(f"    7T-VCA vs 7T-VCO  → même famille : {same_fleet_family('7T-VCA', '7T-VCO')}")   # False
+    print(f"    7T-VCP vs 7T-VCQ  → même famille : {same_fleet_family('7T-VCP', '7T-VCQ')}")   # True
     print("  OK - features.py fonctionne correctement")
