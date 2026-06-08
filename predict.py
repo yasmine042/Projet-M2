@@ -396,9 +396,27 @@ def run():
     # ── 3. Isolation Forest ───────────────────────────────────────────────────
     logger.info("─" * 50)
     logger.info("Scoring Isolation Forest sur vols non matches...")
-    X           = encoder.transform(df_enc)
-    scores      = model.score_samples(X)
-    predictions = model.predict(X)
+    X      = encoder.transform(df_enc)
+    scores = model.score_samples(X)
+
+    # Score weighting : amplifier le signal d'anomalie pour les vols dont la
+    # combinaison complète (NumVol+Route+Mat+Jour) n'a jamais été observée.
+    # FreqComboComplete = -1.0 (index 8) signifie combinaison inconnue.
+    # L'amplification rend ces vols plus facilement isolables par le seuil IF.
+    # Le modèle reste le décideur — on ajuste le score, pas le seuil.
+    freq_combo_col = X[:, 8]
+    novel_mask = freq_combo_col < 0
+    if novel_mask.any():
+        AMPLIFICATION = 1.25
+        scores = scores.copy()
+        scores[novel_mask] *= AMPLIFICATION
+        logger.info(
+            f"  Score weighting x{AMPLIFICATION} : {novel_mask.sum()} vols "
+            f"a combinaison inconnue (FreqComboComplete=-1.0)."
+        )
+
+    # Recalculer predictions avec les scores ajustés (model.offset_ = seuil contamination)
+    predictions = np.where(scores >= model.offset_, 1, -1)
     statuts, seuil_tres = attribuer_statut(scores, predictions)
 
     # ── 4. Raisons anomalie ───────────────────────────────────────────────────
@@ -493,32 +511,32 @@ def run():
 
     # ── 8. Résumé ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 55)
-    print("  RÉSULTATS DÉTECTION ANOMALIES")
+    print("  RESULTATS DETECTION ANOMALIES")
     print("=" * 55)
 
     n_incomp_aims = (df_incomplets["source_table"] == "AIMS").sum()
     n_incomp_mro  = (df_incomplets["source_table"] == "MRO").sum()
 
-    print(f"\n  AIMS ({n_aims_total} vols non matchés) :")
-    print(f"    ✓ Normaux (IF)         : {len(norm_aims)}")
-    print(f"    ⚠ Suspects (IF)        : {(anom_aims['Statut'] == 'Suspect').sum() - n_incomp_aims}")
-    print(f"    ✗ Très Suspects (IF)   : {(anom_aims['Statut'] == 'Très Suspect').sum()}")
-    print(f"    ✗ Données incomplètes  : {n_incomp_aims}")
-    print(f"    ✈ Vols manquants       : {len(manquants_aims)}")
+    print(f"\n  AIMS ({n_aims_total} vols non matches) :")
+    print(f"    [OK] Normaux (IF)         : {len(norm_aims)}")
+    print(f"    [!]  Suspects (IF)        : {(anom_aims['Statut'] == 'Suspect').sum() - n_incomp_aims}")
+    print(f"    [X]  Tres Suspects (IF)   : {(anom_aims['Statut'] == 'Tres Suspect').sum()}")
+    print(f"    [X]  Donnees incompletes  : {n_incomp_aims}")
+    print(f"    [>]  Vols manquants       : {len(manquants_aims)}")
 
-    print(f"\n  MRO ({n_mro_total} vols non matchés) :")
-    print(f"    ✓ Normaux (IF)         : {len(norm_mro)}")
-    print(f"    ⚠ Suspects (IF)        : {(anom_mro['Statut'] == 'Suspect').sum() - n_incomp_mro}")
-    print(f"    ✗ Très Suspects (IF)   : {(anom_mro['Statut'] == 'Très Suspect').sum()}")
-    print(f"    ✗ Données incomplètes  : {n_incomp_mro}")
-    print(f"    ✈ Vols manquants       : {len(manquants_mro)}")
+    print(f"\n  MRO ({n_mro_total} vols non matches) :")
+    print(f"    [OK] Normaux (IF)         : {len(norm_mro)}")
+    print(f"    [!]  Suspects (IF)        : {(anom_mro['Statut'] == 'Suspect').sum() - n_incomp_mro}")
+    print(f"    [X]  Tres Suspects (IF)   : {(anom_mro['Statut'] == 'Tres Suspect').sum()}")
+    print(f"    [X]  Donnees incompletes  : {n_incomp_mro}")
+    print(f"    [>]  Vols manquants       : {len(manquants_mro)}")
 
-    print("\n  Tables créées dans SQL Server :")
-    print(f"    → AnomaliesAIMS     ({len(anom_aims)} lignes)")
-    print(f"    → AnomaliesMRO      ({len(anom_mro)} lignes)")
-    print(f"    → VoisNormalesAIMS  ({len(norm_aims)} lignes)")
-    print(f"    → VoisNormalesMRO   ({len(norm_mro)} lignes)")
-    print(f"    → VolsManquantsIF   ({len(vols_manquants)} lignes)")
+    print("\n  Tables creees dans SQL Server :")
+    print(f"    -> AnomaliesAIMS     ({len(anom_aims)} lignes)")
+    print(f"    -> AnomaliesMRO      ({len(anom_mro)} lignes)")
+    print(f"    -> VoisNormalesAIMS  ({len(norm_aims)} lignes)")
+    print(f"    -> VoisNormalesMRO   ({len(norm_mro)} lignes)")
+    print(f"    -> VolsManquantsIF   ({len(vols_manquants)} lignes)")
     print("=" * 55)
 
 

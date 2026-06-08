@@ -59,7 +59,7 @@ def train():
     print(f"  Vols test  (non vus)              : {len(X_test)}")
     print(f"  Faux positifs sur train           : {fp_train} ({fp_train/len(X_train)*100:.1f}%)")
     print(f"  Faux positifs sur test            : {fp_test}  ({fp_test/len(X_test)*100:.1f}%)")
-    print(f"    → attendu ~{IF_CONFIG['contamination']*100:.0f}%  (= contamination)")
+    print(f"    -> attendu ~{IF_CONFIG['contamination']*100:.0f}%  (= contamination)")
     print(f"  Score moyen test                  : {scores_test.mean():.4f}")
     print(f"  Score min  test (plus suspect)    : {scores_test.min():.4f}")
     print(f"  Score max  test (plus normal)     : {scores_test.max():.4f}")
