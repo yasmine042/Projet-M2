@@ -1,13 +1,5 @@
 """
 predict.py — Détection d'anomalies sur les vols non matchés AIMS/MRO.
-
-L'Isolation Forest est appliqué uniquement aux vols qui n'ont pas trouvé
-de correspondance dans VolsValidesEtape1 (via IDAIMS / IDMRO).
-
-Tables produites :
-  - AnomaliesAIMS   : vols AIMS non matchés + ScoreAnomalie + Statut + RaisonAnomalie
-  - AnomaliesMRO    : vols MRO  non matchés + ScoreAnomalie + Statut + RaisonAnomalie
-  - VolsManquantsIF : vols manquants détectés par analyse de rotation (tous vols)
 """
 
 import logging
@@ -19,6 +11,7 @@ from db import read_table, read_query, write_table
 from features import (
     FlightFeatureEncoder,
     normalize_aims, normalize_mro, normalize_vols_valides,
+    get_fleet_family, same_fleet_family,
 )
 
 import pickle
@@ -46,23 +39,12 @@ def load_model():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def charger_ref_historique():
-    """Charge VolsValidesEtape1 normalisé — référence pour analyser_raison_anomalie."""
     raw = read_table(TABLE_VOLS_VALIDES)
     df  = normalize_vols_valides(raw)
     return df.dropna(subset=["Date", "Matricule", "NumVol", "AeroDepart", "AeroArriv"])
 
 
 def charger_vols_non_matches():
-    """
-    Charge les vols AIMS et MRO qui n'ont pas trouvé de match ETL,
-    identifiés via IDAIMS / IDMRO absents de VolsValidesEtape1.
-
-    Colonnes retournées (uniformisées AIMS + MRO) :
-        IDAIMS, source_table, jour_semaine,
-        MatriculeAIMS, NumVolAIMS, AeroDepartAIMS, AeroArrivAIMS, DateAIMS
-    """
-
-    # ── AIMS non matchés ──────────────────────────────────────────────────────
     df_aims = read_query(f"""
         SELECT
             a.IDAIMS,
@@ -75,13 +57,10 @@ def charger_vols_non_matches():
             CAST(a.Date AS DATE)            AS DateAIMS
         FROM AIMS a
         WHERE a.IDAIMS NOT IN (
-            SELECT IDAIMS
-            FROM {TABLE_VOLS_VALIDES}
-            WHERE IDAIMS IS NOT NULL
+            SELECT IDAIMS FROM {TABLE_VOLS_VALIDES} WHERE IDAIMS IS NOT NULL
         )
     """)
 
-    # ── MRO non matchés ───────────────────────────────────────────────────────
     df_mro = read_query(f"""
         SELECT
             m.IDMRO                         AS IDAIMS,
@@ -97,9 +76,7 @@ def charger_vols_non_matches():
             CAST(m.Date_Vol AS DATE)        AS DateAIMS
         FROM MRO m
         WHERE m.IDMRO NOT IN (
-            SELECT IDMRO
-            FROM {TABLE_VOLS_VALIDES}
-            WHERE IDMRO IS NOT NULL
+            SELECT IDMRO FROM {TABLE_VOLS_VALIDES} WHERE IDMRO IS NOT NULL
         )
     """)
 
@@ -116,17 +93,7 @@ def charger_vols_non_matches():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def attribuer_statut(scores, predictions):
-    """
-    Isolation Forest :
-        predict == 1  → Normal
-        predict == -1 → Anomalie
-
-    Classification :
-        - Très Suspect : top 6% anomalies les plus extrêmes
-        - Suspect      : autres anomalies
-    """
     scores_anormaux = scores[predictions == -1]
-
     if len(scores_anormaux) == 0:
         logger.warning("Aucune anomalie detectee par Isolation Forest.")
         return ["Normal"] * len(scores), None
@@ -142,7 +109,6 @@ def attribuer_statut(scores, predictions):
             statuts.append("Très Suspect")
         else:
             statuts.append("Suspect")
-
     return statuts, seuil_tres
 
 
@@ -153,15 +119,20 @@ def attribuer_statut(scores, predictions):
 def analyser_raison_anomalie(df_volsvalides, row, score, seuil_tres):
     """
     Compare le vol suspect avec VolsValides pour expliquer l'anomalie.
-    df_volsvalides : DataFrame normalisé de VolsValidesEtape1
+
+    Règle famille :
+      Un matricule est considéré acceptable si un matricule de la MÊME famille
+      a déjà opéré ce vol sur cette route. Seul un matricule d'une famille
+      différente (ou famille inconnue = 0) déclenche le motif d'anomalie.
     """
     raisons = []
 
-    nv  = row["NumVol"]
-    dep = row["AeroDepart"]
-    arr = row["AeroArriv"]
-    mat = row["Matricule"]
-    dat = row["Date"]
+    nv       = row["NumVol"]
+    dep      = row["AeroDepart"]
+    arr      = row["AeroArriv"]
+    mat      = row["Matricule"]
+    dat      = row["Date"]
+    famille  = get_fleet_family(mat)   # 0 si matricule inconnu
 
     # ── 1. NumVol jamais vu dans VolsValides ──────────────────────────────────
     numvols_connus = set(df_volsvalides["NumVol"].unique())
@@ -197,27 +168,48 @@ def analyser_raison_anomalie(df_volsvalides, row, score, seuil_tres):
         if not raisons:
             raisons.append(f"Route {dep}→{arr} jamais associée au vol {nv}")
 
-    # ── 3. Matricule inhabituel pour cette route ──────────────────────────────
+    # ── 3. Matricule hors famille pour cette route ────────────────────────────
+    # Un matricule de la MÊME famille qu'un matricule historique est acceptable.
+    # On ne signale une anomalie que si AUCUN matricule de la même famille
+    # n'a jamais opéré ce vol sur cette route.
     if not match_route.empty:
-        matricules_connus = match_route["Matricule"].unique()
-        if mat not in matricules_connus:
+        if famille == 0:
+            # Matricule non référencé dans aucune famille connue → anomalie
+            matricules_connus = match_route["Matricule"].unique()
             raisons.append(
-                f"Matricule '{mat}' inhabituel sur route {dep}→{arr} vol {nv} "
-                f"(attendu : {', '.join(matricules_connus)})"
+                f"Matricule '{mat}' n'appartient à aucune famille connue "
+                f"(matricules historiques sur route {dep}→{arr} vol {nv} : "
+                f"{', '.join(matricules_connus)})"
             )
+        else:
+            # Vérifier si la famille est représentée dans l'historique de cette route
+            familles_historiques = set(
+                match_route["Matricule"].apply(get_fleet_family).unique()
+            )
+            familles_historiques.discard(0)  # ignorer les matricules non référencés
+
+            if famille not in familles_historiques:
+                # La famille du matricule suspect n'a jamais opéré cette route
+                # → vrai changement de famille, anomalie légitime
+                matricules_connus = match_route["Matricule"].unique()
+                familles_connues_str = ", ".join(
+                    f"famille {f}" for f in sorted(familles_historiques)
+                )
+                raisons.append(
+                    f"Matricule '{mat}'  inhabituel sur route "
+                    f"{dep}→{arr} vol {nv} — boeing historique : "
+                   
+                    f"(matricules : {', '.join(matricules_connus)})"
+                )
+            # else : même famille → pas d'anomalie sur ce critère
 
     # ── 4. Date inhabituelle (jour de semaine jamais opéré) ───────────────────
     if pd.notna(dat):
         jours_noms = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"]
         jour = pd.to_datetime(dat).dayofweek
-        match_jour = df_volsvalides[
-            (df_volsvalides["NumVol"]     == nv) &
-            (df_volsvalides["AeroDepart"] == dep) &
-            (df_volsvalides["AeroArriv"]  == arr)
-        ]
-        if not match_jour.empty:
+        if not match_route.empty:
             jours_connus = set(
-                pd.to_datetime(match_jour["Date"]).dt.dayofweek.unique()
+                pd.to_datetime(match_route["Date"]).dt.dayofweek.unique()
             )
             if jour not in jours_connus:
                 jours_connus_noms = [jours_noms[j] for j in sorted(jours_connus)]
@@ -233,35 +225,36 @@ def analyser_raison_anomalie(df_volsvalides, row, score, seuil_tres):
     if not raisons:
         jour = pd.to_datetime(dat).dayofweek if pd.notna(dat) else None
 
-        freq_sans_jour = len(df_volsvalides[
-            (df_volsvalides["NumVol"]     == nv) &
-            (df_volsvalides["AeroDepart"] == dep) &
-            (df_volsvalides["AeroArriv"]  == arr) &
-            (df_volsvalides["Matricule"]  == mat)
-        ])
+        # Recherche dans l'historique en tenant compte de la famille
+        if famille != 0:
+            masque_famille = match_route["Matricule"].apply(
+                lambda m: get_fleet_family(m) == famille
+            )
+            freq_famille_sans_jour = masque_famille.sum()
+            freq_famille_avec_jour = (
+                masque_famille & (
+                    pd.to_datetime(match_route["Date"]).dt.dayofweek == jour
+                )
+            ).sum() if jour is not None else freq_famille_sans_jour
+        else:
+            freq_famille_sans_jour = 0
+            freq_famille_avec_jour = 0
 
-        freq_avec_jour = len(df_volsvalides[
-            (df_volsvalides["NumVol"]     == nv) &
-            (df_volsvalides["AeroDepart"] == dep) &
-            (df_volsvalides["AeroArriv"]  == arr) &
-            (df_volsvalides["Matricule"]  == mat) &
-            (pd.to_datetime(df_volsvalides["Date"]).dt.dayofweek == jour)
-        ]) if jour is not None else freq_sans_jour
-
-        if freq_avec_jour > 0:
+        if freq_famille_avec_jour > 0:
             raisons.append(
                 f"Score IF légèrement anormal ({score:.4f}) — "
-                f"combinaison connue ce jour ({freq_avec_jour} fois dans vols valides) — possible faux positif"
+                f"combinaison connue ce jour ({freq_famille_avec_jour} fois, même famille) "
+                f"— possible faux positif"
             )
-        elif freq_sans_jour > 0:
+        elif freq_famille_sans_jour > 0:
             jours_noms = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"]
             raisons.append(
-                f"Vol {nv} {dep}→{arr} mat:{mat} connu ({freq_sans_jour} fois) "
+                f"Vol {nv} {dep}→{arr} famille {famille} connu ({freq_famille_sans_jour} fois) "
                 f"mais jamais opéré le {jours_noms[jour]} (score:{score:.4f})"
             )
         else:
             raisons.append(
-                f"Combinaison (Vol:{nv} | {dep}→{arr} | Mat:{mat}) "
+                f"Combinaison (Vol:{nv} | {dep}→{arr} | famille:{famille}) "
                 f"absente des vols valides (score:{score:.4f})"
             )
 
@@ -269,54 +262,66 @@ def analyser_raison_anomalie(df_volsvalides, row, score, seuil_tres):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DETECTION DES VOLS MANQUANTS (rotation — tous vols)
+# TYPE ANOMALIE (colonnes erronées)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def detecter_vols_manquants(df, source, raw):
+def determiner_type_anomalie(df_volsvalides, row):
     """
-    Tri : Matricule, Date, ETD (ordre réel des opérations).
-    Rupture : AeroArriv vol N != AeroDepart vol N+1
+    Retourne les colonnes erronées sous forme compacte, ex: "NumVol | Matricule".
+    Miroir de analyser_raison_anomalie, mais produit un label structuré.
     """
-    manquants = []
-    df = df.copy().reset_index(drop=True)
+    types = []
 
-    df_raw = raw.loc[df["_raw_index"]].copy()
-    etd_col = "ETD" if "ETD" in df_raw.columns else "bloc departure"
-    df["_ETD"] = pd.to_datetime(df_raw[etd_col], format="mixed", errors="coerce").values
+    nv      = row["NumVol"]
+    dep     = row["AeroDepart"]
+    arr     = row["AeroArriv"]
+    mat     = row["Matricule"]
+    dat     = row["Date"]
+    famille = get_fleet_family(mat)
 
-    df = df.sort_values(["Matricule", "Date", "_ETD"]).reset_index(drop=True)
+    # 1. NumVol inconnu
+    numvols_connus = set(df_volsvalides["NumVol"].unique())
+    if nv not in numvols_connus:
+        return "NumVol"
 
-    for i in range(len(df) - 1):
-        vol_act  = df.iloc[i]
-        vol_suiv = df.iloc[i + 1]
+    # 2. Route inconnue → AeroDepart et/ou AeroArriv
+    match_route = df_volsvalides[
+        (df_volsvalides["NumVol"]     == nv) &
+        (df_volsvalides["AeroDepart"] == dep) &
+        (df_volsvalides["AeroArriv"]  == arr)
+    ]
+    if match_route.empty:
+        departs_connus  = df_volsvalides[df_volsvalides["NumVol"] == nv]["AeroDepart"].unique()
+        arrivees_connues = df_volsvalides[df_volsvalides["NumVol"] == nv]["AeroArriv"].unique()
+        if dep not in departs_connus:
+            types.append("AeroDepart")
+        if arr not in arrivees_connues:
+            types.append("AeroArriv")
+        if not types:
+            types.append("Route")
 
-        if vol_act["Matricule"] != vol_suiv["Matricule"]:
-            continue
+    # 3. Matricule hors famille
+    if not match_route.empty:
+        if famille == 0:
+            types.append("Matricule")
+        else:
+            familles_historiques = set(match_route["Matricule"].apply(get_fleet_family).unique())
+            familles_historiques.discard(0)
+            if famille not in familles_historiques:
+                types.append("Matricule")
 
-        arriv_act   = vol_act["AeroArriv"]
-        depart_suiv = vol_suiv["AeroDepart"]
+    # 4. Jour de semaine inhabituel
+    if pd.notna(dat) and not match_route.empty:
+        jour = pd.to_datetime(dat).dayofweek
+        jours_connus = set(pd.to_datetime(match_route["Date"]).dt.dayofweek.unique())
+        if jour not in jours_connus:
+            types.append("Date")
 
-        if arriv_act == depart_suiv:
-            continue
+    # 5. Score IF très bas sans autre cause identifiée
+    if not types:
+        types.append("Score IF anormal")
 
-        manquants.append({
-            "Source":            source,
-            "Matricule":         vol_act["Matricule"],
-            "DateVolPrecedent":  vol_act["Date"],
-            "DateVolSuivant":    vol_suiv["Date"],
-            "AeroDepartEstime":  arriv_act,
-            "AeroArrivEstime":   depart_suiv,
-            "NumVolEstime":      "?",
-            "NumVolPrecedent":   vol_act["NumVol"],
-            "NumVolSuivant":     vol_suiv["NumVol"],
-            "ETDPrecedent":      vol_act["_ETD"],
-            "ETDSuivant":        vol_suiv["_ETD"],
-            "RaisonDetection":   f"RotationRompue: attendu {arriv_act} trouvé {depart_suiv}",
-        })
-
-    df_manquants = pd.DataFrame(manquants)
-    logger.info(f"  [{source}] {len(df_manquants)} vols manquants detectes.")
-    return df_manquants
+    return " | ".join(types)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -329,7 +334,6 @@ def run():
     encoder = FlightFeatureEncoder.load()
     df_ref  = charger_ref_historique()
 
-    # ── 1. Vols non matchés (filtrés côté SQL) ────────────────────────────────
     logger.info("─" * 50)
     logger.info("Chargement des vols non matches...")
     df_nm = charger_vols_non_matches()
@@ -338,7 +342,6 @@ def run():
         logger.warning("Aucun vol non matche — rien a scorer.")
         return
 
-    # ── 2. Renommage pour l'encodeur ──────────────────────────────────────────
     df_enc = df_nm.rename(columns={
         "MatriculeAIMS":  "Matricule",
         "NumVolAIMS":     "NumVol",
@@ -348,7 +351,6 @@ def run():
     }).copy()
     df_enc["Date"] = pd.to_datetime(df_enc["Date"], errors="coerce")
 
-    # ── 2b. Isoler les vols avec champs vides → anomalie directe, pas IF ─────
     def est_vide(s):
         return s.isna() | (s.astype(str).str.strip() == "")
 
@@ -363,7 +365,6 @@ def run():
     idx_incomplets = df_enc[masque_incomplet].index
     idx_complets   = df_enc[~masque_incomplet].index
 
-    # Construire la raison pour chaque vol incomplet
     champs_verif = [
         ("MatriculeAIMS",  "Matricule"),
         ("NumVolAIMS",     "NumVol"),
@@ -382,6 +383,14 @@ def run():
         ]),
         axis=1,
     )
+    df_incomplets["TypeAnomalie"] = df_incomplets.apply(
+        lambda r: " | ".join([
+            orig
+            for orig, _ in champs_verif
+            if pd.isna(r.get(orig)) or str(r.get(orig, "")).strip() == ""
+        ]),
+        axis=1,
+    )
     n_incomplets = len(df_incomplets)
     if n_incomplets:
         logger.warning(
@@ -389,21 +398,15 @@ def run():
             f"→ flaggés Suspect directement (non scorés par IF)."
         )
 
-    # Passer uniquement les vols complets dans l'IF
     df_enc = df_enc.loc[idx_complets].reset_index(drop=True)
     df_nm  = df_nm.loc[idx_complets].reset_index(drop=True)
 
-    # ── 3. Isolation Forest ───────────────────────────────────────────────────
     logger.info("─" * 50)
     logger.info("Scoring Isolation Forest sur vols non matches...")
     X      = encoder.transform(df_enc)
     scores = model.score_samples(X)
 
-    # Score weighting : amplifier le signal d'anomalie pour les vols dont la
-    # combinaison complète (NumVol+Route+Mat+Jour) n'a jamais été observée.
-    # FreqComboComplete = -1.0 (index 8) signifie combinaison inconnue.
-    # L'amplification rend ces vols plus facilement isolables par le seuil IF.
-    # Le modèle reste le décideur — on ajuste le score, pas le seuil.
+    # Score weighting sur FreqComboFamille (index 8 — dernière colonne)
     freq_combo_col = X[:, 8]
     novel_mask = freq_combo_col < 0
     if novel_mask.any():
@@ -412,39 +415,36 @@ def run():
         scores[novel_mask] *= AMPLIFICATION
         logger.info(
             f"  Score weighting x{AMPLIFICATION} : {novel_mask.sum()} vols "
-            f"a combinaison inconnue (FreqComboComplete=-1.0)."
+            f"a combinaison inconnue (FreqComboFamille=-1.0)."
         )
 
-    # Recalculer predictions avec les scores ajustés (model.offset_ = seuil contamination)
     predictions = np.where(scores >= model.offset_, 1, -1)
     statuts, seuil_tres = attribuer_statut(scores, predictions)
 
-    # ── 4. Raisons anomalie ───────────────────────────────────────────────────
     raisons = []
-    for i, (idx, row) in enumerate(df_enc.iterrows()):
+    types   = []
+    for i, (_, row) in enumerate(df_enc.iterrows()):
         if statuts[i] == "Normal":
             raisons.append("Aucune")
+            types.append("Aucune")
         else:
-            raisons.append(
-                analyser_raison_anomalie(df_ref, row, scores[i], seuil_tres)
-            )
+            raisons.append(analyser_raison_anomalie(df_ref, row, scores[i], seuil_tres))
+            types.append(determiner_type_anomalie(df_ref, row))
 
-    # ── 5. Construction résultats ─────────────────────────────────────────────
     df_result = df_nm.copy().reset_index(drop=True)
     df_result["ScoreAnomalie"]  = np.round(scores, 4)
     df_result["Statut"]         = statuts
     df_result["RaisonAnomalie"] = raisons
+    df_result["TypeAnomalie"]   = types
 
     anom    = df_result[df_result["Statut"] != "Normal"].copy()
     normaux = df_result[df_result["Statut"] == "Normal"].copy()
 
-    # Fusionner les anomalies IF avec les vols incomplets détectés avant IF
     if not df_incomplets.empty:
         anom = pd.concat([anom, df_incomplets], ignore_index=True)
 
     anom_aims = anom[anom["source_table"] == "AIMS"].drop(columns=["source_table"])
     anom_mro  = anom[anom["source_table"] == "MRO"].drop(columns=["source_table"])
-
     norm_aims = normaux[normaux["source_table"] == "AIMS"].drop(columns=["source_table"])
     norm_mro  = normaux[normaux["source_table"] == "MRO"].drop(columns=["source_table"])
 
@@ -456,28 +456,6 @@ def run():
     logger.info(f"  AIMS non matches scorés : {n_aims_total}  →  suspects : {len(anom_aims)}")
     logger.info(f"  MRO  non matches scorés : {n_mro_total}   →  suspects : {len(anom_mro)}")
 
-    # ── 6. Vols manquants (rotation sur TOUS les vols) ────────────────────────
-    logger.info("─" * 50)
-    logger.info("Analyse rotation (tous vols)...")
-
-    raw_aims    = read_table("AIMS")
-    df_aims_all = normalize_aims(raw_aims)
-    df_aims_all["_raw_index"] = raw_aims.index
-    df_aims_all = df_aims_all.dropna(
-        subset=["Date", "Matricule", "NumVol", "AeroDepart", "AeroArriv"]
-    )
-
-    raw_mro    = read_table("MRO")
-    df_mro_all = normalize_mro(raw_mro)
-    df_mro_all["_raw_index"] = raw_mro.index
-    df_mro_all = df_mro_all.dropna(
-        subset=["Date", "Matricule", "NumVol", "AeroDepart", "AeroArriv"]
-    )
-
-    manquants_aims = detecter_vols_manquants(df_aims_all, "AIMS", raw_aims)
-    manquants_mro  = detecter_vols_manquants(df_mro_all, "MRO",  raw_mro)
-
-    # ── 7. Sauvegarde SQL Server ──────────────────────────────────────────────
     logger.info("─" * 50)
     logger.info("Sauvegarde dans SQL Server...")
 
@@ -492,8 +470,6 @@ def run():
         "DateAIMS":      "DateMRO",
     })
     write_table(anom_mro, "AnomaliesMRO")
-
-    # Vols non matchés classés NORMAUX par IF (predict == 1)
     write_table(norm_aims, "VoisNormalesAIMS")
 
     norm_mro = norm_mro.rename(columns={
@@ -506,10 +482,6 @@ def run():
     })
     write_table(norm_mro, "VoisNormalesMRO")
 
-    vols_manquants = pd.concat([manquants_aims, manquants_mro], ignore_index=True)
-    write_table(vols_manquants, "VolsManquantsIF")
-
-    # ── 8. Résumé ─────────────────────────────────────────────────────────────
     print("\n" + "=" * 55)
     print("  RESULTATS DETECTION ANOMALIES")
     print("=" * 55)
@@ -522,27 +494,20 @@ def run():
     print(f"    [!]  Suspects (IF)        : {(anom_aims['Statut'] == 'Suspect').sum() - n_incomp_aims}")
     print(f"    [X]  Tres Suspects (IF)   : {(anom_aims['Statut'] == 'Tres Suspect').sum()}")
     print(f"    [X]  Donnees incompletes  : {n_incomp_aims}")
-    print(f"    [>]  Vols manquants       : {len(manquants_aims)}")
 
     print(f"\n  MRO ({n_mro_total} vols non matches) :")
     print(f"    [OK] Normaux (IF)         : {len(norm_mro)}")
     print(f"    [!]  Suspects (IF)        : {(anom_mro['Statut'] == 'Suspect').sum() - n_incomp_mro}")
     print(f"    [X]  Tres Suspects (IF)   : {(anom_mro['Statut'] == 'Tres Suspect').sum()}")
     print(f"    [X]  Donnees incompletes  : {n_incomp_mro}")
-    print(f"    [>]  Vols manquants       : {len(manquants_mro)}")
 
     print("\n  Tables creees dans SQL Server :")
     print(f"    -> AnomaliesAIMS     ({len(anom_aims)} lignes)")
     print(f"    -> AnomaliesMRO      ({len(anom_mro)} lignes)")
     print(f"    -> VoisNormalesAIMS  ({len(norm_aims)} lignes)")
     print(f"    -> VoisNormalesMRO   ({len(norm_mro)} lignes)")
-    print(f"    -> VolsManquantsIF   ({len(vols_manquants)} lignes)")
     print("=" * 55)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     run()

@@ -1,3 +1,4 @@
+# features.py  — version corrigée complète
 import pickle
 import logging
 import numpy as np
@@ -6,6 +7,22 @@ from sklearn.preprocessing import LabelEncoder
 from config import ENCODER_PATH
 
 logger = logging.getLogger(__name__)
+
+# ─── Familles d'appareils (fleet types) ───────────────────────────────────────
+
+FLEET_FAMILIES = {
+    "7T-VCA": 1, "7T-VCB": 1, "7T-VCC": 1, "7T-VCD": 1,
+    "7T-VCE": 1, "7T-VCF": 1, "7T-VCT": 1,
+    "7T-VCP": 2, "7T-VCQ": 2, "7T-VCR": 2, "7T-VCS": 2,
+    "7T-VCL": 3, "7T-VCM": 3, "7T-VCN": 3, "7T-VCO": 3,
+}
+
+def get_fleet_family(matricule: str) -> int:
+    return FLEET_FAMILIES.get(str(matricule).strip().upper(), 0)
+
+def same_fleet_family(mat1: str, mat2: str) -> bool:
+    f1, f2 = get_fleet_family(mat1), get_fleet_family(mat2)
+    return f1 != 0 and f1 == f2
 
 # ─── Normalisation ────────────────────────────────────────────────────────────
 
@@ -44,33 +61,35 @@ def normalize_vols_valides(df):
 
 class FlightFeatureEncoder:
     """
-    Transforme les colonnes en nombres pour l'Isolation Forest.
+    Features (9) :
+      NumVolNum         → int extrait du numéro de vol
+      MatriculeCode     → LabelEncoder
+      FleetFamilyCode   → famille (1/2/3) ou 0
+      FreqVolJour       → P(vol opère ce jour)
+      FreqVolFamille    → P(vol opéré par cette FAMILLE)
+      FreqRouteJour     → P(route opère ce jour)
+      FreqVolRoute      → P(NumVol, Dep, Arr) sans jour ni immat
+      FreqVolRouteJour  → P(NumVol, Dep, Arr, Jour) sans immat
+      FreqComboFamille  → P(NumVol+Route+Famille+Jour)
 
-    Features de base (5) :
-      NumVol     → extraction int   "1010"      → 1010
-      Matricule  → LabelEncoder     "7T-VCA"    → 42
-      Date       → dayofweek        21/01/2019  → 0 (Lundi)
-      AeroDepart → LabelEncoder     "ALG"       → 0
-      AeroArriv  → LabelEncoder     "HME"       → 7
-
-    Features de fréquence historique (3) — calculées sur VolsValidesEtape1 :
-      FreqVolJour   → proportion de fois où ce vol opère ce jour (0.0–1.0)
-      FreqVolMat    → proportion de fois où ce vol est assuré par cette immat.
-      FreqRouteJour → proportion de fois où cette route opère ce jour
-
-    Un vol avec FreqVolJour=0.0 n'a JAMAIS opéré ce jour dans l'historique.
-    L'IF détecte 0.0 comme isolé → classé Suspect sans règle externe.
+    Raisonement clé :
+      Deux matricules de la même famille sont considérés équivalents.
+      FreqVolFamille et FreqComboFamille agrègent sur la famille, pas sur le matricule.
+      Un vol fait habituellement par la famille 1, s'il arrive avec un autre matricule
+      de la famille 1 → fréquence positive → pas d'anomalie.
+      Un matricule hors famille (ou famille inconnue = 0) → fréquence potentiellement
+      nulle → -1.0 → détecté comme anomalie par l'Isolation Forest.
     """
 
     def __init__(self):
-        self.encoders = {}
-        self._fitted  = False
-        # Tables de fréquence (tuple-key → float)
-        self._freq_vol_jour   = {}
-        self._freq_vol_mat    = {}
-        self._freq_route_jour = {}
-        # Set complet des combinaisons valides (NumVol, Dep, Arr, Mat, dayofweek)
-        # Equivalent exact de la jointure SQL sur 5 champs + DATEPART(dw)
+        self.encoders     = {}
+        self._fitted      = False
+        self._freq_vol_jour      = {}
+        self._freq_vol_famille   = {}   # (NumVol, FleetFamily) → float
+        self._freq_route_jour    = {}
+        self._freq_vol_route     = {}   # (NumVol, Dep, Arr) → float
+        self._freq_vol_route_jour = {}  # (NumVol, Dep, Arr, jour) → float
+        self._freq_combo_fam     = {}   # (NumVol, Dep, Arr, FleetFamily, jour) → float
         self._known_combos: set = set()
 
     def _numvol_to_int(self, series):
@@ -85,49 +104,57 @@ class FlightFeatureEncoder:
         )
 
     def _build_freq_tables(self, df):
-        """Calcule les 3 tables de fréquence à partir du jeu d'entraînement."""
         tmp = df.copy()
-        tmp["_jour"]  = tmp["Date"].dt.dayofweek
-        tmp["_route"] = tmp["AeroDepart"].astype(str) + "_" + tmp["AeroArriv"].astype(str)
-        tmp["_nv"]    = tmp["NumVol"].astype(str)
-        tmp["_mat"]   = tmp["Matricule"].astype(str)
+        tmp["_jour"]    = tmp["Date"].dt.dayofweek
+        tmp["_route"]   = tmp["AeroDepart"].astype(str) + "_" + tmp["AeroArriv"].astype(str)
+        tmp["_nv"]      = tmp["NumVol"].astype(str)
+        tmp["_famille"] = tmp["Matricule"].apply(get_fleet_family)
 
-        # freq_vol_jour : parmi tous les vols de ce numéro, quelle fraction est ce jour ?
-        vol_total      = tmp.groupby("_nv").size()
-        vol_jour_cnt   = tmp.groupby(["_nv", "_jour"]).size()
+        # freq_vol_jour : fraction du vol ce jour
+        vol_total    = tmp.groupby("_nv").size()
+        vol_jour_cnt = tmp.groupby(["_nv", "_jour"]).size()
         self._freq_vol_jour = (vol_jour_cnt / vol_total).to_dict()
 
-        # freq_vol_mat : parmi tous les vols de ce numéro, quelle fraction avec cette immat ?
-        vol_mat_cnt    = tmp.groupby(["_nv", "_mat"]).size()
-        self._freq_vol_mat = (vol_mat_cnt / vol_total).to_dict()
+        # freq_vol_famille : fraction du vol assurée par cette FAMILLE (pas le matricule)
+        # Permet l'interchangeabilité intra-famille
+        vol_fam_cnt  = tmp.groupby(["_nv", "_famille"]).size()
+        self._freq_vol_famille = (vol_fam_cnt / vol_total).to_dict()
 
-        # freq_route_jour : parmi tous les vols de cette route, quelle fraction est ce jour ?
+        # freq_route_jour
         route_total    = tmp.groupby("_route").size()
         route_jour_cnt = tmp.groupby(["_route", "_jour"]).size()
         self._freq_route_jour = (route_jour_cnt / route_total).to_dict()
 
-        # Fréquence de la combinaison complète (5 champs + jour)
-        # C'est la feature la plus discriminante : jamais vue → -1.0
-        n_total = len(tmp)
-        combo_cnt = tmp.groupby(["_nv", "AeroDepart", "AeroArriv", "_mat", "_jour"]).size()
-        self._freq_combo = (combo_cnt / n_total).to_dict()
+        # freq_vol_route : fréquence de (NumVol, Dep, Arr) – sans jour ni immat
+        n_total          = len(tmp)
+        vol_route_cnt    = tmp.groupby(["_nv", "AeroDepart", "AeroArriv"]).size()
+        self._freq_vol_route = (vol_route_cnt / n_total).to_dict()
 
-        # Set pour lookup rapide O(1) — utilisé aussi par le post-filtre si besoin
-        self._known_combos = set(self._freq_combo.keys())
+        # freq_vol_route_jour : fréquence de (NumVol, Dep, Arr, Jour) – sans immat
+        vol_route_jour_cnt = tmp.groupby(["_nv", "AeroDepart", "AeroArriv", "_jour"]).size()
+        self._freq_vol_route_jour = (vol_route_jour_cnt / n_total).to_dict()
+
+        # freq_combo_famille : combinaison complète avec FAMILLE (pas matricule)
+        combo_cnt = tmp.groupby(
+            ["_nv", "AeroDepart", "AeroArriv", "_famille", "_jour"]
+        ).size()
+        self._freq_combo_fam = (combo_cnt / n_total).to_dict()
+        self._known_combos   = set(self._freq_combo_fam.keys())
 
         logger.info(
             f"  Tables freq : {len(self._freq_vol_jour)} vol-jours | "
-            f"{len(self._freq_vol_mat)} vol-mats | "
+            f"{len(self._freq_vol_famille)} vol-familles | "
             f"{len(self._freq_route_jour)} route-jours | "
-            f"{len(self._freq_combo)} combos complets"
+            f"{len(self._freq_vol_route)} vol-routes | "
+            f"{len(self._freq_vol_route_jour)} vol-route-jours | "
+            f"{len(self._freq_combo_fam)} combos (famille)"
         )
 
     def fit(self, df):
-        for col in ["Matricule", "AeroDepart", "AeroArriv"]:
-            le = LabelEncoder()
-            le.fit(df[col].astype(str))
-            self.encoders[col] = le
-            logger.info(f"  '{col}' : {len(le.classes_)} valeurs uniques")
+        le = LabelEncoder()
+        le.fit(df["Matricule"].astype(str))
+        self.encoders["Matricule"] = le
+        logger.info(f"  'Matricule' : {len(le.classes_)} valeurs uniques")
 
         self._build_freq_tables(df)
         self._fitted = True
@@ -140,46 +167,49 @@ class FlightFeatureEncoder:
 
         result = pd.DataFrame(index=df.index)
 
-        # ── 5 features de base ──────────────────────────────────────────────
-        result["NumVolNum"]      = self._numvol_to_int(df["NumVol"])
-        result["MatriculeCode"]  = self._label_encode("Matricule",  df["Matricule"])
-        result["DateJour"]       = df["Date"].apply(
-            lambda d: d.dayofweek if pd.notna(d) else -1
+        # ── features de base ────────────────────────────────────────────────
+        result["NumVolNum"]       = self._numvol_to_int(df["NumVol"])
+        result["MatriculeCode"]   = self._label_encode("Matricule",  df["Matricule"])
+        result["FleetFamilyCode"] = df["Matricule"].apply(
+            lambda m: get_fleet_family(str(m))
         )
-        result["AeroDepartCode"] = self._label_encode("AeroDepart", df["AeroDepart"])
-        result["AeroArrivCode"]  = self._label_encode("AeroArriv",  df["AeroArriv"])
 
-        # ── 3 features de fréquence historique ─────────────────────────────
-        nv    = df["NumVol"].astype(str)
-        mat   = df["Matricule"].astype(str)
-        dep   = df["AeroDepart"].astype(str)
-        arr   = df["AeroArriv"].astype(str)
-        route = dep + "_" + arr
-        jour  = df["Date"].apply(lambda d: d.dayofweek if pd.notna(d) else -1)
+        # ── features de fréquence ────────────────────────────────────────────
+        nv      = df["NumVol"].astype(str)
+        dep     = df["AeroDepart"].astype(str)
+        arr     = df["AeroArriv"].astype(str)
+        route   = dep + "_" + arr
+        jour    = df["Date"].apply(lambda d: d.dayofweek if pd.notna(d) else -1)
+        famille = df["Matricule"].apply(get_fleet_family)  # int 0/1/2/3
 
-        # Combinaison jamais vue dans l'historique → -1.0 (hors plage [0,1])
-        # L'IF est entraîné sur des vols valides où ces fréquences sont >0
-        # Encoder 0 comme -1 place le point clairement hors de la distribution apprise
-        result["FreqVolJour"]   = [
+        result["FreqVolJour"] = [
             self._freq_vol_jour.get((v, j), -1.0)
             for v, j in zip(nv, jour)
         ]
-        result["FreqVolMat"]    = [
-            self._freq_vol_mat.get((v, m), -1.0)
-            for v, m in zip(nv, mat)
+
+        # Lookup par FAMILLE (interchangeabilité intra-famille garantie)
+        result["FreqVolFamille"] = [
+            self._freq_vol_famille.get((v, f), -1.0)
+            for v, f in zip(nv, famille)
         ]
+
         result["FreqRouteJour"] = [
             self._freq_route_jour.get((r, j), -1.0)
             for r, j in zip(route, jour)
         ]
+        result["FreqVolRoute"] = [
+            self._freq_vol_route.get((v, d, a), -1.0)
+            for v, d, a in zip(nv, dep, arr)
+        ]
+        result["FreqVolRouteJour"] = [
+            self._freq_vol_route_jour.get((v, d, a, j), -1.0)
+            for v, d, a, j in zip(nv, dep, arr, jour)
+        ]
 
-        # ── Feature 9 : fréquence de la combinaison complète ────────────────
-        # Valeur dans [0.00003, ~0.15] pour les vols connus de l'historique.
-        # -1.0 si la combinaison (NumVol+Route+Mat+Jour) n'a jamais existé.
-        # C'est la feature la plus discriminante pour les anomalies sémantiques.
-        result["FreqComboComplete"] = [
-            self._freq_combo.get((v, d, a, m, j), -1.0)
-            for v, d, a, m, j in zip(nv, dep, arr, mat, jour)
+        # Combo complet avec famille (pas matricule)
+        result["FreqComboFamille"] = [
+            self._freq_combo_fam.get((v, d, a, f, j), -1.0)
+            for v, d, a, f, j in zip(nv, dep, arr, famille, jour)
         ]
 
         return result.values.astype(float)
@@ -198,6 +228,7 @@ class FlightFeatureEncoder:
             enc = pickle.load(f)
         logger.info(f"Encodeur charge <- {ENCODER_PATH}")
         return enc
+
 
 # ─── Test rapide ──────────────────────────────────────────────────────────────
 

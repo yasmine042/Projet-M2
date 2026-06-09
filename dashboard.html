@@ -323,8 +323,7 @@ function exportCSV(){
                 r.Date,r.Matricule,r.Statut,r.Score,
                 '"'+String(r.Raison).replace(/"/g,'""')+'"'].join(';'));
   });
-  var blob=new Blob(['﻿'+lines.join('
-')],{type:'text/csv;charset=utf-8;'});
+  var blob=new Blob(['﻿'+lines.join('')],{type:'text/csv;charset=utf-8;'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');
   a.href=url; a.download='anomalies_filtrees.csv'; a.click();
