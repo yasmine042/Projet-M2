@@ -12,12 +12,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 def train():
-    # ── 1. Charger VolsValides ─────────────────────────────────────────────
-    logger.info("Chargement de VolsValidesEtape1...")
+    # ── 1. Charger VolsValides EtapeValidation='1' (5 clés sur 5) ────────────
+    logger.info("Chargement de VolsValidesEtape1 (EtapeValidation='1')...")
     raw = read_table("VolsValidesEtape1")
+
+    if "EtapeValidation" in raw.columns:
+        avant = len(raw)
+        raw = raw[raw["EtapeValidation"].astype(str) == "1"]
+        logger.info(f"  EtapeValidation='1' : {len(raw)} / {avant} lignes conservées.")
+    else:
+        logger.warning("  Colonne EtapeValidation absente — toutes les lignes utilisées.")
+
     df  = normalize_vols_valides(raw)
     df  = df.dropna(subset=["Date", "Matricule", "NumVol", "AeroDepart", "AeroArriv"])
-    logger.info(f"  {len(df)} vols valides apres nettoyage.")
+    logger.info(f"  {len(df)} vols valides après nettoyage.")
 
     # ── 2. Encoder les 5 features ──────────────────────────────────────────
     logger.info("Encodage des 5 features...")

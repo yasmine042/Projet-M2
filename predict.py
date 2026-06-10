@@ -6,7 +6,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from config import MODEL_PATH, TABLE_VOLS_VALIDES
+from config import MODEL_PATH, RF_MODEL_PATH, TABLE_VOLS_VALIDES
 from db import read_table, read_query, write_table
 from features import (
     FlightFeatureEncoder,
@@ -406,18 +406,6 @@ def run():
     X      = encoder.transform(df_enc)
     scores = model.score_samples(X)
 
-    # Score weighting sur FreqComboFamille (index 8 — dernière colonne)
-    freq_combo_col = X[:, 8]
-    novel_mask = freq_combo_col < 0
-    if novel_mask.any():
-        AMPLIFICATION = 1.25
-        scores = scores.copy()
-        scores[novel_mask] *= AMPLIFICATION
-        logger.info(
-            f"  Score weighting x{AMPLIFICATION} : {novel_mask.sum()} vols "
-            f"a combinaison inconnue (FreqComboFamille=-1.0)."
-        )
-
     predictions = np.where(scores >= model.offset_, 1, -1)
     statuts, seuil_tres = attribuer_statut(scores, predictions)
 
@@ -506,6 +494,107 @@ def run():
     print(f"    -> AnomaliesMRO      ({len(anom_mro)} lignes)")
     print(f"    -> VoisNormalesAIMS  ({len(norm_aims)} lignes)")
     print(f"    -> VoisNormalesMRO   ({len(norm_mro)} lignes)")
+    print("=" * 55)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCAN RF — détecte les faux négatifs dans VoisNormalesAIMS / VoisNormalesMRO
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_rf_scan():
+    """
+    Applique le Random Forest sur les vols que l'IF a classés normaux.
+    Les vols que le RF reclasse en anomalie sont les faux négatifs de l'IF.
+    Résultat sauvegardé dans FauxNegatifsAIMS et FauxNegatifsMRO,
+    avec RaisonAnomalie et TypeAnomalie calculés comme pour les anomalies IF.
+    """
+    logger.info("─" * 50)
+    logger.info("Chargement du modèle Random Forest...")
+    try:
+        with open(RF_MODEL_PATH, "rb") as f:
+            rf = pickle.load(f)
+    except FileNotFoundError:
+        logger.error(f"Modèle RF introuvable : {RF_MODEL_PATH}. Lancez train_rf.py d'abord.")
+        return
+
+    encoder = FlightFeatureEncoder.load()
+    df_ref  = charger_ref_historique()   # VolsValides — nécessaire pour analyser_raison_anomalie
+
+    specs = [
+        ("VoisNormalesAIMS", "MatriculeAIMS", "NumVolAIMS",
+         "AeroDepartAIMS", "AeroArrivAIMS", "DateAIMS", "FauxNegatifsAIMS"),
+        ("VoisNormalesMRO",  "MatriculeMRO",  "NumVolMRO",
+         "AeroDepartMRO",  "AeroArrivMRO",  "DateMRO",  "FauxNegatifsMRO"),
+    ]
+
+    total_fn = 0
+    for table_src, mat_c, nv_c, dep_c, arr_c, dat_c, table_dst in specs:
+
+        logger.info(f"  Scan RF sur {table_src}...")
+        try:
+            df_norm = read_table(table_src)
+        except Exception:
+            logger.warning(f"  {table_src} introuvable — ignoré.")
+            continue
+
+        if df_norm.empty:
+            logger.info(f"  {table_src} vide — rien à scanner.")
+            continue
+
+        # Renommer vers format commun pour l'encodeur et l'analyse
+        df_enc = df_norm.rename(columns={
+            mat_c: "Matricule", nv_c: "NumVol",
+            dep_c: "AeroDepart", arr_c: "AeroArriv", dat_c: "Date",
+        }).copy()
+        df_enc["Date"] = pd.to_datetime(df_enc["Date"], errors="coerce")
+
+        masque_ok = (
+            df_enc["Date"].notna() &
+            df_enc["Matricule"].astype(str).str.strip().ne("") &
+            df_enc["NumVol"].astype(str).str.strip().ne("") &
+            df_enc["AeroDepart"].astype(str).str.strip().ne("") &
+            df_enc["AeroArriv"].astype(str).str.strip().ne("")
+        )
+        df_enc  = df_enc[masque_ok].reset_index(drop=True)
+        df_norm = df_norm[masque_ok].reset_index(drop=True)
+
+        if df_enc.empty:
+            continue
+
+        X      = encoder.transform(df_enc)
+        X_rf   = X[:, :8]                    # FreqComboFamille exclue — même que l'entraînement
+        preds  = rf.predict(X_rf)
+        probas = rf.predict_proba(X_rf)[:, 1]   # probabilité d'être anomalie (0→1)
+
+        fn_mask   = preds == 1
+        n_fn      = fn_mask.sum()
+        total_fn += n_fn
+        logger.info(f"  {table_src} : {len(df_norm)} vols normaux (IF) → {n_fn} faux négatifs (RF)")
+
+        df_fn     = df_norm[fn_mask].copy().reset_index(drop=True)
+        df_enc_fn = df_enc[fn_mask].copy().reset_index(drop=True)
+        scores_fn = probas[fn_mask]
+
+        # Analyser la raison métier pour chaque faux négatif (même logique que IF)
+        raisons, types = [], []
+        for i, (_, row) in enumerate(df_enc_fn.iterrows()):
+            raisons.append(analyser_raison_anomalie(df_ref, row, scores_fn[i], seuil_tres=None))
+            types.append(determiner_type_anomalie(df_ref, row))
+
+        df_fn["ScoreAnomalie"]  = np.round(scores_fn, 4)
+        df_fn["Statut"]         = "Faux Négatif IF"
+        df_fn["RaisonAnomalie"] = raisons
+        df_fn["TypeAnomalie"]   = types
+
+        write_table(df_fn, table_dst)
+        logger.info(f"  → {table_dst} sauvegardé ({len(df_fn)} lignes)")
+
+    print("\n" + "=" * 55)
+    print("  RÉSULTATS SCAN RF (faux négatifs IF)")
+    print("=" * 55)
+    print(f"  Total faux négatifs détectés : {total_fn}")
+    print(f"    -> FauxNegatifsAIMS")
+    print(f"    -> FauxNegatifsMRO")
     print("=" * 55)
 
 

@@ -44,6 +44,7 @@ FEATURES_ANOMALIES = [
     "BlockMin",        # bh_h*60 + bh_m        → temps bloc anormal ?
 ]
 # ─── Chemins de sauvegarde ────────────────────────────────────────────────────
-MODEL_PATH   = "models/isolation_forest.pkl"
-ENCODER_PATH = "models/label_encoders.pkl"
+MODEL_PATH    = "models/isolation_forest.pkl"
+RF_MODEL_PATH = "models/random_forest.pkl"
+ENCODER_PATH  = "models/label_encoders.pkl"
 LOG_PATH     = "logs/pipeline.log"
