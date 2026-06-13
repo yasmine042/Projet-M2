@@ -11,16 +11,16 @@ import shap
 from config import MODEL_PATH, ENCODER_PATH
 from features import FlightFeatureEncoder
 
-# Noms lisibles des 9 features (5 de base + 3 fréquences partielles + 1 fréquence complète)
+# Noms lisibles des 9 features de FlightFeatureEncoder (features.py)
 FEATURE_LABELS = [
     "Numéro Vol",
     "Matricule",
-    "Jour semaine",
-    "Aéroport Départ",
-    "Aéroport Arrivée",
+    "Famille flotte",
     "Fréq. Vol×Jour",
-    "Fréq. Vol×Matricule",
+    "Fréq. Vol×Famille",
     "Fréq. Route×Jour",
+    "Fréq. Vol×Route",
+    "Fréq. Vol×Route×Jour",
     "Fréq. Combo Complète",
 ]
 
