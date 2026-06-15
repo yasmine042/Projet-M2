@@ -3,7 +3,9 @@ train_rf.py — Entraînement Random Forest supervisé (étape 2).
 
 Labels :
   0 = Normal   ← VolsValidesEtape1 filtrée sur EtapeValidation='1'
-  1 = Anomalie ← AnomaliesAIMS + AnomaliesMRO, sans 'Score IF anormal'
+  1 = Anomalie ← AnomaliesAIMS + AnomaliesMRO (toutes). Les remplacements
+                 intra-famille sans autre anomalie sont déjà reclassés en
+                 Normal par predict.py (TypeAnomalie == "Score IF anormal").
 
 Features : 8 (FreqComboFamille exclue — même logique que l'IF l'utilise déjà).
 Évaluation : cross-validation 5-fold avec encodeur refit par fold.
@@ -24,7 +26,7 @@ from sklearn.metrics import (
 
 from config import RF_MODEL_PATH, TABLE_VOLS_VALIDES
 from db import read_table
-from features import FlightFeatureEncoder, normalize_vols_valides, get_fleet_family
+from features import FlightFeatureEncoder, normalize_vols_valides
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,14 +35,8 @@ RF_N_FEATURES = 8   # FreqComboFamille (index 8) exclue du RF
 
 
 def _normalize_anomalies(df, source):
-    """Renomme colonnes AIMS/MRO et retire les 'Score IF anormal'."""
+    """Renomme colonnes AIMS/MRO (toutes les anomalies sont conservées)."""
     df = df.copy()
-    if "TypeAnomalie" in df.columns:
-        avant = len(df)
-        df = df[df["TypeAnomalie"] != "Score IF anormal"]
-        retires = avant - len(df)
-        if retires:
-            logger.info(f"  {retires} lignes 'Score IF anormal' retirées ({source}).")
     rename = {
         "AIMS": {"MatriculeAIMS": "Matricule", "NumVolAIMS": "NumVol",
                  "AeroDepartAIMS": "AeroDepart", "AeroArrivAIMS": "AeroArriv",
@@ -52,28 +48,6 @@ def _normalize_anomalies(df, source):
     df = df.rename(columns=rename[source])
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     return df.dropna(subset=["Date", "Matricule", "NumVol", "AeroDepart", "AeroArriv"])
-
-
-def _filtrer_remplacement_famille(df_anom, df_vv):
-    """Retire les anomalies où un matricule de même famille est dans VolsValides."""
-    idx_familles = (
-        df_vv.groupby(["NumVol", "AeroDepart", "AeroArriv"])["Matricule"]
-        .apply(lambda mats: {get_fleet_family(m) for m in mats} - {0})
-        .to_dict()
-    )
-    def est_remplacement(row):
-        fam = get_fleet_family(str(row["Matricule"]))
-        if fam == 0:
-            return False
-        cle = (str(row["NumVol"]), str(row["AeroDepart"]), str(row["AeroArriv"]))
-        return fam in idx_familles.get(cle, set())
-    avant  = len(df_anom)
-    masque = df_anom.apply(est_remplacement, axis=1)
-    df_ok  = df_anom[~masque].reset_index(drop=True)
-    retires = avant - len(df_ok)
-    if retires:
-        logger.info(f"  {retires} remplacement(s) intra-famille retirés.")
-    return df_ok
 
 
 def train_rf():
@@ -109,12 +83,9 @@ def train_rf():
         logger.error("Aucune anomalie disponible. Lancez d'abord le pipeline IF.")
         return
     logger.info(
-        f"  {len(df_anom)} anomalies après filtre 'Score IF anormal' "
+        f"  {len(df_anom)} anomalies retenues pour entraînement RF "
         f"({len(df_an_aims)} AIMS + {len(df_an_mro)} MRO)."
     )
-    logger.info("Filtre remplacements intra-famille...")
-    df_anom = _filtrer_remplacement_famille(df_anom, df_vv)
-    logger.info(f"  {len(df_anom)} anomalies retenues pour entraînement RF.")
 
     # ── 3. Cross-validation 5-fold — évaluation sans leakage ─────────────────
     #

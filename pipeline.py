@@ -1,5 +1,9 @@
 " lance tout de A à Z"
+import os
 import logging
+
+os.makedirs("logs", exist_ok=True)
+
 from train import train
 from train_rf import train_rf
 from predict import run, run_rf_scan
@@ -12,9 +16,6 @@ logging.basicConfig(
         logging.FileHandler("logs/pipeline.log", encoding="utf-8")
     ]
 )
-
-import os
-os.makedirs("logs", exist_ok=True)
 
 print("\n" + "=" * 50)
 print("  PIPELINE DETECTION ANOMALIES VOLS")
