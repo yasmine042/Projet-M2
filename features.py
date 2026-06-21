@@ -1,9 +1,8 @@
-# features.py  — version corrigée complète
+# features.py
 import pickle
 import logging
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder
 from config import ENCODER_PATH
 
 logger = logging.getLogger(__name__)
@@ -61,9 +60,8 @@ def normalize_vols_valides(df):
 
 class FlightFeatureEncoder:
     """
-    Features (9) :
+    Features (8) :
       NumVolNum         → int extrait du numéro de vol
-      MatriculeCode     → LabelEncoder
       FleetFamilyCode   → famille (1/2/3) ou 0
       FreqVolJour       → P(vol opère ce jour)
       FreqVolFamille    → P(vol opéré par cette FAMILLE)
@@ -72,17 +70,11 @@ class FlightFeatureEncoder:
       FreqVolRouteJour  → P(NumVol, Dep, Arr, Jour) sans immat
       FreqComboFamille  → P(NumVol+Route+Famille+Jour)
 
-    Raisonement clé :
-      Deux matricules de la même famille sont considérés équivalents.
-      FreqVolFamille et FreqComboFamille agrègent sur la famille, pas sur le matricule.
-      Un vol fait habituellement par la famille 1, s'il arrive avec un autre matricule
-      de la famille 1 → fréquence positive → pas d'anomalie.
-      Un matricule hors famille (ou famille inconnue = 0) → fréquence potentiellement
-      nulle → -1.0 → détecté comme anomalie par l'Isolation Forest.
+    MatriculeCode (LabelEncoder individuel) supprimé : redondant avec FleetFamilyCode
+    car toute la logique métier raisonne au niveau famille, jamais appareil individuel.
     """
 
     def __init__(self):
-        self.encoders     = {}
         self._fitted      = False
         self._freq_vol_jour      = {}
         self._freq_vol_famille   = {}   # (NumVol, FleetFamily) → float
@@ -95,13 +87,6 @@ class FlightFeatureEncoder:
     def _numvol_to_int(self, series):
         extracted = series.astype(str).str.extract(r"(\d+)")[0]
         return pd.to_numeric(extracted, errors="coerce").fillna(-1).astype(int)
-
-    def _label_encode(self, col, series):
-        le    = self.encoders[col]
-        known = set(le.classes_)
-        return series.astype(str).apply(
-            lambda x: int(le.transform([x])[0]) if x in known else -1
-        )
 
     def _build_freq_tables(self, df):
         tmp = df.copy()
@@ -151,14 +136,9 @@ class FlightFeatureEncoder:
         )
 
     def fit(self, df):
-        le = LabelEncoder()
-        le.fit(df["Matricule"].astype(str))
-        self.encoders["Matricule"] = le
-        logger.info(f"  'Matricule' : {len(le.classes_)} valeurs uniques")
-
         self._build_freq_tables(df)
         self._fitted = True
-        logger.info(f"Encodeur entraine sur {len(df)} vols valides (9 features).")
+        logger.info(f"Encodeur entraine sur {len(df)} vols valides (8 features).")
         return self
 
     def transform(self, df):
@@ -169,7 +149,6 @@ class FlightFeatureEncoder:
 
         # ── features de base ────────────────────────────────────────────────
         result["NumVolNum"]       = self._numvol_to_int(df["NumVol"])
-        result["MatriculeCode"]   = self._label_encode("Matricule",  df["Matricule"])
         result["FleetFamilyCode"] = df["Matricule"].apply(
             lambda m: get_fleet_family(str(m))
         )

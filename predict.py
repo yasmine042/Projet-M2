@@ -373,7 +373,6 @@ def run():
 
     raisons = []
     types   = []
-    n_reclasses = 0
     for i, (_, row) in enumerate(df_enc.iterrows()):
         if statuts[i] == "Normal":
             raisons.append("Aucune")
@@ -381,22 +380,8 @@ def run():
             continue
 
         type_anomalie = determiner_type_anomalie(df_ref, row)
-        if type_anomalie == "Score IF anormal":
-            # NumVol, route, famille du matricule et jour sont tous cohérents
-            # avec l'historique : pas de raison métier d'anomalie -> Normal.
-            statuts[i] = "Normal"
-            raisons.append("Aucune")
-            types.append("Aucune")
-            n_reclasses += 1
-        else:
-            raisons.append(analyser_raison_anomalie(df_ref, row, scores[i], seuil_tres))
-            types.append(type_anomalie)
-
-    if n_reclasses:
-        logger.info(
-            f"  {n_reclasses} vol(s) reclassés Normal "
-            f"(score IF bas mais NumVol/Route/Famille/Date cohérents)."
-        )
+        raisons.append(analyser_raison_anomalie(df_ref, row, scores[i], seuil_tres))
+        types.append(type_anomalie)
 
     df_result = df_nm.copy().reset_index(drop=True)
     df_result["ScoreAnomalie"]  = np.round(scores, 4)
@@ -487,7 +472,7 @@ def run_rf_scan():
         return
 
     encoder = FlightFeatureEncoder.load()
-    df_ref  = charger_ref_historique()   # VolsValides — nécessaire pour analyser_raison_anomalie
+    df_ref  = charger_ref_historique()
 
     specs = [
         ("VoisNormalesAIMS", "MatriculeAIMS", "NumVolAIMS",
@@ -531,9 +516,9 @@ def run_rf_scan():
             continue
 
         X      = encoder.transform(df_enc)
-        X_rf   = X[:, :8]                    # FreqComboFamille exclue — même que l'entraînement
+        X_rf   = X[:, :8]
         preds  = rf.predict(X_rf)
-        probas = rf.predict_proba(X_rf)[:, 1]   # probabilité d'être anomalie (0→1)
+        probas = rf.predict_proba(X_rf)[:, 1]
 
         fn_mask   = preds == 1
         n_fn      = fn_mask.sum()
