@@ -133,8 +133,8 @@ BORDER    = "#e6eaef"
 GRID      = "#eef1f5"
 
 PAGES = [("home", '<i class="bi bi-house"></i> Accueil'),
-         ("overview", '<i class="bi bi-speedometer2"></i> Overview'),
-         ("dashboard", '<i class="bi bi-bar-chart-line"></i> Dashboard'),
+         ("overview", '<i class="bi bi-speedometer2"></i> Vue globale'),
+         ("dashboard", '<i class="bi bi-bar-chart-line"></i> Tableau de bord'),
          ("tables", '<i class="bi bi-table"></i> Tables'),
          ("detection", '<i class="bi bi-cpu"></i> Détection')]
 
@@ -931,9 +931,9 @@ _HOME_CSS = """
 """
 
 _HOME_TILES = [
-    ("overview",  "Overview",
+    ("overview",  "Vue globale",
      "État de santé des données aériennes : vols réconciliés, anomalies détectées et alertes opérationnelles."),
-    ("dashboard", "Dashboard",
+    ("dashboard", "Tableau de bord",
      "Investigation et suivi des anomalies : filtrez, analysez et marquez les écarts de saisie traités."),
     ("tables",    "Tables",
      "Consultation des données sources : vols opérations, vols maintenance et résultats de l'analyse."),
@@ -963,7 +963,6 @@ def page_home():
               d'opérations et de maintenance, détection intelligente des écarts
               de saisie et suivi des anomalies non traitées.</div>
             <div class="illu">{_HERO_SVG}</div>
-            <div class="foot">PFE · Master 2 — Base TALEXPDWH</div>
           </div>
           <div class="navcol">
             <div class="navhead">Explorer la plateforme</div>
@@ -1235,28 +1234,19 @@ def page_dashboard():
             else:
                 st.info("—")
 
-    # ── Heatmap + Distribution des scores ──────────────────────────────────
-    h1, h2 = st.columns(2)
+    # ── Heatmap + Anomalies par source ────────────────────────────────────
+    h1, h2 = st.columns([1, 1])
     with h1:
         with st.container(border=True):
             st.markdown('<div class="ttl">Quand planifier les contrôles qualité de saisie ?</div>',
                         unsafe_allow_html=True)
-            hm_result = heatmap_chart(df)
+            hm_result = heatmap_chart(df, h=380)
             hm_fig = hm_result[0] if hm_result else None
-            hm_pivot = hm_result[1] if hm_result else None
             if hm_fig:
                 st.plotly_chart(hm_fig, use_container_width=True,
                                 config={"displayModeBar": False, "scrollZoom": False})
-                if hm_pivot is not None and hm_pivot.values.max() > 0:
-                    mx_val = int(hm_pivot.values.max())
-                    mx_pos = hm_pivot.stack().idxmax()
-                    jour_mx = _JOURS_HM[mx_pos[0]] if mx_pos[0] < 7 else str(mx_pos[0])
-                    mois_mx = _MOIS_HM[mx_pos[1] - 1] if 1 <= mx_pos[1] <= 12 else str(mx_pos[1])
-                    st.markdown(
-                        f"<div style='background:#fdecea;border-left:4px solid #d62728;"
-                        f"padding:10px 16px;border-radius:6px;margin-top:8px;'>"
-                        f"<b>Point critique :</b> {jour_mx} en {mois_mx} — "
-                        f"<b>{mx_val} anomalies</b></div>", unsafe_allow_html=True)
+                st.caption("Plus la cellule est rouge, plus ce jour/mois concentre "
+                           "d'erreurs de saisie")
                 fc1, fc2 = st.columns(2)
                 with fc1:
                     sel_j = st.selectbox("Jour", ["—"] + _JOURS_HM, key="hm_jour")
@@ -1285,7 +1275,7 @@ def page_dashboard():
                     text=src_text, textposition="outside",
                     textfont=dict(color=INK, size=12),
                     hovertemplate="%{x} : %{y} anomalies<extra></extra>"))
-                _light(fig_s, h=340)
+                _light(fig_s, h=380)
                 st.plotly_chart(fig_s, use_container_width=True,
                                 config={"displayModeBar": False})
             else:
