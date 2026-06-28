@@ -1,13 +1,12 @@
 {
-  "auc": 0.997,
-  "cv_auc": 0.9525,
+  "auc": 0.9525,
   "n_normal": 13551,
   "n_anomalie": 366,
   "confusion_matrix": {
-    "tn": 13211,
-    "fp": 340,
-    "fn": 1,
-    "tp": 365
+    "tn": 12640,
+    "fp": 911,
+    "fn": 41,
+    "tp": 325
   },
   "feature_importances": {
     "NumVolNum": 0.0301,

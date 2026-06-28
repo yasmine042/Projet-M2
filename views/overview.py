@@ -449,6 +449,7 @@ def page_overview():
     total_aims = max(k["total_aims"], 1)
     total_mro  = max(k["total_mro"],  1)
     taux_mro   = 100 * k["valides"] / total_mro
+    taux_global = 100 * (k["valides"] * 2) / (total_aims + total_mro)
 
     pct_nm_aims = int(k["nm_aims"] * 100 // total_aims)
     pct_nm_mro  = int(k["nm_mro"]  * 100 // total_mro)
@@ -459,7 +460,7 @@ def page_overview():
     bad_col  = "#D40C1C"
     neu_col  = "#7b8794"
 
-    rec_dot  = ok_col  if taux_aims >= 95 else (warn_col if taux_aims >= 80 else bad_col)
+    rec_dot  = ok_col  if taux_global >= 95 else (warn_col if taux_global >= 80 else bad_col)
     nt_dot   = ok_col  if len(non_traitees) == 0 else (warn_col if len(non_traitees) < 50 else bad_col)
     crit_dot = ok_col  if len(critiques) == 0 else (warn_col if len(critiques) < 10 else bad_col)
 
@@ -467,7 +468,7 @@ def page_overview():
     #  BLOC 0 — Hero santé (feu tricolore)
     # ─────────────────────────────────────────────────────────────────────
     st.markdown(
-        _health_hero(taux_aims, len(non_traitees), len(critiques),
+        _health_hero(taux_global, len(non_traitees), len(critiques),
                      len(anom_ce_mois), lbl_mois, ok_col, warn_col, bad_col),
         unsafe_allow_html=True,
     )

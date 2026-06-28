@@ -150,16 +150,10 @@ def train_rf():
     rf.fit(X_final, y_final)
     logger.info("  Modèle final entraîné.")
 
-    # ── 5. Evaluation du modele final (encodeur production) ─────────────────
-    prod_probas = rf.predict_proba(X_final)[:, 1]
-    prod_preds  = rf.predict(X_final)
-    prod_auc    = roc_auc_score(y_final, prod_probas)
-    prod_cm     = confusion_matrix(y_final, prod_preds)
-    tn, fp, fn, tp = prod_cm.ravel()
-
+    # ── 5. Evaluation (CV = metriques honnetes, prod = verification) ────────
     cv_auc = roc_auc_score(y_cv, cv_probas)
     cv_cm  = confusion_matrix(y_cv, cv_preds)
-    tn_cv, fp_cv, fn_cv, tp_cv = cv_cm.ravel()
+    tn, fp, fn, tp = cv_cm.ravel()
 
     print("\n" + "=" * 60)
     print("  RESULTAT ENTRAINEMENT RANDOM FOREST")
@@ -167,13 +161,9 @@ def train_rf():
     print(f"  Dataset  -- normaux : {len(df_vv)}  |  anomalies : {len(df_anom)}")
 
     print("\n  -- Cross-validation 5-fold (evaluation sans leakage) -----")
-    print(f"  AUC-ROC : {cv_auc:.4f}")
-    print(f"  TN={tn_cv} | TP={tp_cv} | FP={fp_cv} | FN={fn_cv}")
-
-    print("\n  -- Modele final (encodeur production) --------------------")
-    print(classification_report(y_final, prod_preds,
+    print(classification_report(y_cv, cv_preds,
           target_names=["Normal", "Anomalie"], digits=4))
-    print(f"  AUC-ROC : {prod_auc:.4f}")
+    print(f"  AUC-ROC : {cv_auc:.4f}")
     print(f"  TN={tn} | TP={tp} | FP={fp} | FN={fn}")
 
     feature_names = [
@@ -190,7 +180,7 @@ def train_rf():
         bar = "#" * int(imp * 40)
         print(f"    {name:<22} {imp:.4f}  {bar}")
 
-    # ── 6. Graphiques pour le memoire ─────────────────────────────────────────
+    # ── 6. Graphiques pour le memoire (metriques CV) ──────────────────────────
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -198,50 +188,50 @@ def train_rf():
 
     os.makedirs("figures", exist_ok=True)
 
-    fig_style = dict(figsize=(7, 5), dpi=150)
+    fig_style = dict(figsize=(7, 5), dpi=300)
     colors = {"green": "#54942C", "blue": "#3b6fe0", "red": "#D40C1C",
               "amber": "#e8920c", "teal": "#10a59b", "violet": "#7c5cff"}
 
-    # 6a. Courbe ROC (modele final)
-    fpr, tpr, _ = roc_curve(y_final, prod_probas)
+    # 6a. Courbe ROC (CV)
+    fpr, tpr, _ = roc_curve(y_cv, cv_probas)
     fig, ax = plt.subplots(**fig_style)
-    ax.plot(fpr, tpr, color=colors["blue"], lw=2.5, label=f"RF (AUC = {prod_auc:.4f})")
+    ax.plot(fpr, tpr, color=colors["blue"], lw=2.5, label=f"RF (AUC = {cv_auc:.4f})")
     ax.plot([0, 1], [0, 1], "k--", lw=1, alpha=0.4, label="Aleatoire (AUC = 0.5)")
     ax.set_xlabel("Taux de Faux Positifs (FPR)")
     ax.set_ylabel("Taux de Vrais Positifs (TPR)")
-    ax.set_title("Courbe ROC -- Random Forest")
+    ax.set_title("Courbe ROC -- Random Forest (CV 5-fold)")
     ax.legend(loc="lower right")
     ax.grid(alpha=0.2)
     fig.tight_layout()
     fig.savefig("figures/roc_curve_rf.png")
     plt.close(fig)
 
-    # 6b. Courbe Precision-Recall (modele final)
-    prec_arr, rec_arr, _ = precision_recall_curve(y_final, prod_probas)
+    # 6b. Courbe Precision-Recall (CV)
+    prec_arr, rec_arr, _ = precision_recall_curve(y_cv, cv_probas)
     fig, ax = plt.subplots(**fig_style)
     ax.plot(rec_arr, prec_arr, color=colors["green"], lw=2.5)
     ax.set_xlabel("Recall (classe Anomalie)")
     ax.set_ylabel("Precision (classe Anomalie)")
-    ax.set_title("Courbe Precision-Recall -- Random Forest")
+    ax.set_title("Courbe Precision-Recall -- Random Forest (CV 5-fold)")
     ax.grid(alpha=0.2)
     fig.tight_layout()
     fig.savefig("figures/precision_recall_rf.png")
     plt.close(fig)
 
-    # 6c. Matrice de confusion (modele final)
-    fig, ax = plt.subplots(figsize=(6, 5), dpi=150)
-    im = ax.imshow(prod_cm, cmap="Greens", aspect="auto")
+    # 6c. Matrice de confusion (CV)
+    fig, ax = plt.subplots(figsize=(6, 5), dpi=300)
+    ax.imshow(cv_cm, cmap="Greens", aspect="auto")
     labels_rc = ["Normal", "Anomalie"]
     ax.set_xticks([0, 1]); ax.set_xticklabels(labels_rc)
     ax.set_yticks([0, 1]); ax.set_yticklabels(labels_rc)
     ax.set_xlabel("Predit"); ax.set_ylabel("Reel")
-    ax.set_title("Matrice de confusion -- Random Forest")
+    ax.set_title("Matrice de confusion -- Random Forest (CV 5-fold)")
     for i in range(2):
         for j in range(2):
-            val = prod_cm[i, j]
+            val = cv_cm[i, j]
             ax.text(j, i, f"{val:,}", ha="center", va="center",
                     fontsize=18, fontweight="bold",
-                    color="white" if val > prod_cm.max()/2 else "black")
+                    color="white" if val > cv_cm.max()/2 else "black")
     fig.tight_layout()
     fig.savefig("figures/confusion_matrix_rf.png")
     plt.close(fig)
@@ -263,16 +253,16 @@ def train_rf():
     fig.savefig("figures/feature_importance_rf.png")
     plt.close(fig)
 
-    # 6e. Distribution des probabilites RF
+    # 6e. Distribution des probabilites RF (CV)
     fig, ax = plt.subplots(**fig_style)
-    ax.hist(prod_probas[y_final == 0], bins=50, alpha=0.7, color=colors["green"],
+    ax.hist(cv_probas[y_cv == 0], bins=50, alpha=0.7, color=colors["green"],
             label="Normaux", density=True)
-    ax.hist(prod_probas[y_final == 1], bins=50, alpha=0.7, color=colors["red"],
+    ax.hist(cv_probas[y_cv == 1], bins=50, alpha=0.7, color=colors["red"],
             label="Anomalies", density=True)
     ax.axvline(0.5, color="black", ls="--", lw=1.5, label="Seuil = 0.50")
     ax.set_xlabel("P(Anomalie)")
     ax.set_ylabel("Densite")
-    ax.set_title("Distribution des probabilites RF")
+    ax.set_title("Distribution des probabilites RF (CV 5-fold)")
     ax.legend()
     ax.grid(alpha=0.2)
     fig.tight_layout()
@@ -287,8 +277,7 @@ def train_rf():
         pickle.dump(rf, f)
 
     metrics = {
-        "auc": round(prod_auc, 4),
-        "cv_auc": round(cv_auc, 4),
+        "auc": round(cv_auc, 4),
         "n_normal": int(len(df_vv)),
         "n_anomalie": int(len(df_anom)),
         "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
