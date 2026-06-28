@@ -5,7 +5,7 @@ Modifiez uniquement les valeurs marquées 'à adapter'.
 
 # ─── Connexion SQL Server ──────────────────────────────────────────────────────
 DB_CONFIG = {
-    "server":             "DESKTOP-GH5U4JQ",
+    "server":             "DESKTOP-JC4TRUJ",
     "database":           "TALEXPDWH",
     "driver":             "ODBC Driver 17 for SQL Server",
     "trusted_connection": "yes",
