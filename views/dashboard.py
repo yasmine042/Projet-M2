@@ -402,12 +402,14 @@ def page_dashboard():
                                 config={"displayModeBar": False})
             else:
                 st.info("Aucune donnée")
-
-    # ════════════════════════════════════════════════════════════════════
-    #  ROW 2 — Heatmap (1) + Source (1)  ← hauteur identique des deux
+# ════════════════════════════════════════════════════════════════════
+    #  ROW 2 — Heatmap (1) + Source (1)
     # ════════════════════════════════════════════════════════════════════
     st.markdown(_section_hdr("Temporalité & Sources", "clock-history", TEAL),
                 unsafe_allow_html=True)
+
+    # Hauteur commune des deux graphes Plotly
+    _H_ROW2 = 300
 
     h1, h2 = st.columns(2)
 
@@ -423,22 +425,17 @@ def page_dashboard():
             hm_pivot  = hm_result[1] if hm_result else None
 
             if hm_fig:
-                # ← hauteur fixe identique à h2
-                _plotly_base(hm_fig, _H_HEATMAP)
+                _plotly_base(hm_fig, _H_ROW2)
                 hm_fig.update_layout(margin=dict(t=10, b=10, l=40, r=10))
                 st.plotly_chart(hm_fig, use_container_width=True,
                                 config={"displayModeBar": False, "scrollZoom": False})
 
+                # ── Info + selects (restent dans le container) ──────────
                 if hm_pivot is not None and hm_pivot.values.max() > 0:
-                    mx_val = int(hm_pivot.values.max())
-                    mx_pos = hm_pivot.stack().idxmax()
-                    jour_mx = _JOURS_HM[mx_pos[0]] if mx_pos[0] < 7 else str(mx_pos[0])
-                    mois_mx = _MOIS_HM[mx_pos[1]-1] if 1 <= mx_pos[1] <= 12 else str(mx_pos[1])
                     st.markdown(
-                        f'<div style="margin-top:8px;font-size:12px;color:{MUTED};">'
+                        f'<div style="margin-top:6px;font-size:11.5px;color:{MUTED};">'
                         f'<i class="bi bi-info-circle"></i> '
-                        f'Dans la carte thermique, plus une cellule est rouge, plus le nombre '
-                        f'd\'anomalies détectées pour cette période est élevé.'
+                        f'Plus une cellule est rouge, plus le nombre d\'anomalies est élevé.'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
@@ -452,6 +449,7 @@ def page_dashboard():
                     _field_label("calendar-month", "Mois", TEAL)
                     sel_m = st.selectbox(" ", ["—"] + _MOIS_HM, key="hm_mois",
                                          label_visibility="collapsed")
+
                 if sel_j != "—" and "jour_semaine" in df.columns:
                     df = df[df["jour_semaine"] == _JOURS_HM.index(sel_j)]
                 if sel_m != "—" and "mois_num" in df.columns:
@@ -474,6 +472,10 @@ def page_dashboard():
                 src_colors = [BLUE if s == "AIMS" else TEAL for s in src_labs]
                 src_text   = [f"{v}  ({100*v/src_total:.0f}%)" for v in src_vals]
 
+                # ── Graphe barres avec hauteur augmentée pour compenser ──
+                # info (≈22px) + label×2 (≈20px×2) + select×2 (≈44px×2) + marges (≈10px)
+                _H_SRC = _H_ROW2 + 22 + 20 + 44 + 20 + 44 + 10 - 55  # ≈ 380 px
+
                 fig_s = go.Figure(go.Bar(
                     x=src_labs, y=src_vals,
                     marker=dict(color=src_colors,
@@ -485,8 +487,7 @@ def page_dashboard():
                                   family="Inter, Segoe UI, sans-serif"),
                     hovertemplate="%{x} : %{y} anomalies<extra></extra>",
                 ))
-                # ← même hauteur que hm_fig
-                _plotly_base(fig_s, _H_SOURCE)
+                _plotly_base(fig_s, _H_SRC)
                 fig_s.update_layout(
                     bargap=0.40,
                     xaxis=dict(
@@ -498,8 +499,6 @@ def page_dashboard():
                         gridcolor="#f0f2f5",
                         gridwidth=1,
                         showline=False,
-                        # range auto mais on ajoute 20 % de marge haute
-                        # pour que les labels "text outside" ne débordent pas
                         range=[0, max(src_vals) * 1.25] if src_vals else [0, 1],
                     ),
                     margin=dict(t=30, b=20, l=10, r=10),
@@ -508,7 +507,6 @@ def page_dashboard():
                                 config={"displayModeBar": False})
             else:
                 st.info("Données insuffisantes")
-
     # ════════════════════════════════════════════════════════════════════
     #  TABLE — Detail des anomalies
     # ════════════════════════════════════════════════════════════════════
