@@ -42,53 +42,39 @@ df_nm_enc = df_nm.rename(columns={
 df_nm_enc["Date"] = pd.to_datetime(df_nm_enc["Date"], errors="coerce")
 print(f"  Vols non-matches : {len(df_nm)}")
 
-# -- Meme split 80/20 pour les deux ----------------------------------------
+# -- Split 80/20 pour OHE uniquement ---------------------------------------
 X_train_df, _ = train_test_split(df_vv, test_size=0.2, random_state=42)
-print(f"  Split 80/20 : {len(X_train_df)} entrainement")
+print(f"  Split 80/20 (OHE) : {len(X_train_df)} entrainement")
 
-# -- Reference : modele sauvegarde (FE) ------------------------------------
+# =========================================================================
+#  1. FREQUENCY ENCODING — modele sauvegarde (encodeur 100%, IF production)
+# =========================================================================
 print("\n" + "-" * 65)
-print("  REFERENCE : modele sauvegarde (Frequency Encoding, 8 features)")
+print("  1) FREQUENCY ENCODING — modele sauvegarde (encodeur 100%)")
 print("-" * 65)
+
 with open(MODEL_PATH, "rb") as f:
     iso_saved = pickle.load(f)
 encoder_saved = FlightFeatureEncoder.load()
-X_nm_fe = encoder_saved.transform(df_nm_enc)
-scores_ref = iso_saved.score_samples(X_nm_fe)
-preds_ref = np.where(scores_ref >= iso_saved.offset_, 1, -1)
-n_ref = int((preds_ref == -1).sum())
-print(f"  Anomalies detectees : {n_ref}")
-
-# =========================================================================
-#  1. FREQUENCY ENCODING (re-entraine, meme split)
-# =========================================================================
-print("\n" + "-" * 65)
-print("  1) FREQUENCY ENCODING (8 features)")
-print("-" * 65)
 
 t0 = time.perf_counter()
-enc_fe = FlightFeatureEncoder()
-enc_fe.fit(X_train_df)
-X_train_fe = enc_fe.transform(X_train_df)
+X_nm_fe = encoder_saved.transform(df_nm_enc)
 t_enc_fe = time.perf_counter() - t0
 
 t0 = time.perf_counter()
-iso_fe = IsolationForest(**IF_CONFIG)
-iso_fe.fit(X_train_fe)
-t_train_fe = time.perf_counter() - t0
-
-t0 = time.perf_counter()
-X_nm_fe2 = enc_fe.transform(df_nm_enc)
-scores_fe = iso_fe.score_samples(X_nm_fe2)
-preds_fe = np.where(scores_fe >= iso_fe.offset_, 1, -1)
+scores_fe = iso_saved.score_samples(X_nm_fe)
+preds_fe = np.where(scores_fe >= iso_saved.offset_, 1, -1)
 t_score_fe = time.perf_counter() - t0
 
 n_fe = int((preds_fe == -1).sum())
-print(f"  Dimensions       : {X_train_fe.shape[1]} features")
+n_ref = n_fe
+X_train_fe_shape1 = X_nm_fe.shape[1]
+print(f"  Dimensions       : {X_train_fe_shape1} features")
 print(f"  Encodage         : {t_enc_fe:.3f} sec")
-print(f"  Entrainement IF  : {t_train_fe:.3f} sec")
+print(f"  Entrainement IF  : deja entraine (modele sauvegarde)")
 print(f"  Scoring          : {t_score_fe:.3f} sec")
 print(f"  Anomalies        : {n_fe}")
+t_train_fe = 0.0
 
 # =========================================================================
 #  2. ONE-HOT ENCODING
@@ -141,15 +127,15 @@ print("  TABLEAU RECAPITULATIF")
 print(f"{'=' * 65}")
 print(f"  {'Critere':<30s}  {'Freq. Encoding':>16s}  {'One-Hot':>16s}")
 print(f"  {'-'*30}  {'-'*16}  {'-'*16}")
-print(f"  {'Dimensions':<30s}  {X_train_fe.shape[1]:>16d}  {n_ohe_cols:>16d}")
+print(f"  {'Dimensions':<30s}  {X_train_fe_shape1:>16d}  {n_ohe_cols:>16d}")
 print(f"  {'Encodage (sec)':<30s}  {t_enc_fe:>16.3f}  {t_enc_ohe:>16.3f}")
-print(f"  {'Entrainement IF (sec)':<30s}  {t_train_fe:>16.3f}  {t_train_ohe:>16.3f}")
+print(f"  {'Entrainement IF (sec)':<30s}  {'(sauvegarde)':>16s}  {t_train_ohe:>16.3f}")
 print(f"  {'Scoring (sec)':<30s}  {t_score_fe:>16.3f}  {t_score_ohe:>16.3f}")
 print(f"  {'Anomalies detectees':<30s}  {n_fe:>16d}  {n_ohe:>16d}")
 print(f"  {'Ref (modele sauvegarde)':<30s}  {n_ref:>16d}  {'--':>16s}")
 print(f"  {'Valeurs inconnues gerees':<30s}  {'Oui (-1.0)':>16s}  {'Non (ignore)':>16s}")
-ratio = n_ohe_cols / X_train_fe.shape[1]
-print(f"\n  Reduction dimensionnelle : {n_ohe_cols} -> {X_train_fe.shape[1]} = {(1 - 1/ratio)*100:.1f}%")
+ratio = n_ohe_cols / X_train_fe_shape1
+print(f"\n  Reduction dimensionnelle : {n_ohe_cols} -> {X_train_fe_shape1} = {(1 - 1/ratio)*100:.1f}%")
 
 # -- Concordance des predictions -------------------------------------------
 agree = int((preds_fe == preds_ohe).sum())

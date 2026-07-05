@@ -262,36 +262,41 @@ def page_detection():
         unsafe_allow_html=True)
 
     # ── Verdict ──
-    if if_bad:
-        verdict = _verdict_card(
-            CRIMSON, "bi-shield-exclamation", "Anomalie détectée",
-            "Ce vol présente un comportement inhabituel par rapport à l'historique des données.",
-            _badge(_certitude(res["score"], res["if_offset"]), CRIMSON))
-    elif rf_bad:
-        verdict = _verdict_card(
-            CRIMSON, "bi-shield-exclamation", "Anomalie détectée",
-            "Écart repéré par l'analyse approfondie",
-            _badge(f"Probabilité d'écart · {res['rf_proba']:.0%}", CRIMSON))
+    if anomalie:
+        reason_parts = [p.strip() for p in str(res["raison"]).split("|")
+                        if p.strip() and p.strip().lower() != "aucune"]
+        reason_html = "<br>".join(reason_parts) if reason_parts else "Écart détecté par rapport à l'historique."
+        verdict = (
+            '<div style="max-width:580px;margin:0 auto;'
+            'border:2px solid #e53935;border-radius:16px;'
+            'padding:28px 32px;text-align:center;background:#fff;">'
+            '<i class="bi bi-shield-exclamation" '
+            'style="font-size:48px;color:#e53935;"></i>'
+            '<div style="font-size:22px;font-weight:800;'
+            'color:#e53935;margin-top:12px;">Anomalie détectée</div>'
+            '<div style="height:1px;background:#f5e6e6;margin:16px 0;"></div>'
+            f'<div style="font-size:14px;color:#666;">'
+            f'{reason_html}</div></div>')
     else:
-        verdict = _verdict_card(
-            GREEN, "bi-shield-check", "Vol normal",
-            "Ce vol correspond aux schémas habituels de l'historique",
-            _badge(_certitude(res["score"], res["if_offset"]), OLIVE_D))
+        verdict = (
+            '<div style="max-width:580px;margin:0 auto;'
+            'border:2px solid #2d8a4e;border-radius:16px;'
+            'padding:28px 32px;text-align:center;background:#fff;">'
+            '<i class="bi bi-shield-check" '
+            'style="font-size:48px;color:#2d8a4e;"></i>'
+            '<div style="font-size:22px;font-weight:800;'
+            'color:#2d8a4e;margin-top:12px;">Vol normal</div>'
+            '<div style="height:1px;background:#e6f5ea;margin:16px 0;"></div>'
+            '<div style="font-size:14px;color:#666;">'
+            'Aucun écart détecté .</div></div>')
 
-    # ── Layout & Alignement Parfait des Sorties ──
-    c1, c2 = st.columns([1.1, 0.9], gap="large", vertical_alignment="top")
-
-    with c1:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
         st.markdown(verdict, unsafe_allow_html=True)
         st.markdown(
-            f'<div style="font-size: 12px; color: {MUTED}; margin-top: 14px; padding-left: 4px; line-height:1.4;">'
+            f'<div style="font-size:12px;color:{MUTED};margin-top:14px;'
+            f'text-align:center;line-height:1.4;">'
             f'<i class="bi bi-info-circle" style="margin-right:6px;"></i>'
             f'L\'analyse vérifie la cohérence de saisie des données du vol, '
-            f'non le déroulement opérationnel du vol.'
-            f'</div>', 
-            unsafe_allow_html=True
-        )
-
-    with c2:
-        st.markdown(_diagnostic(res["raison"], "bad" if anomalie else "ok"),
-                    unsafe_allow_html=True)
+            f'non le déroulement opérationnel du vol.</div>',
+            unsafe_allow_html=True)
