@@ -15,7 +15,6 @@ SQL Server connectivity via ODBC, and a Streamlit dashboard for result explorati
 - `config.py`: SQL Server settings, model paths, and feature definitions
 - `db.py`: SQL Server access using SQLAlchemy + pyodbc
 - `features.py`: flight data normalization and domain feature encoding
-- `shap_explainer.py`: optional SHAP interpretation support
 
 ## Project structure
 
@@ -102,3 +101,7 @@ streamlit run app.py
 ## License
 
 This project is licensed under the MIT License. See `LICENSE` for details.
+
+## Contacts
+
+This README is automatically generated from the project structure. For any questions, refer to the main scripts: `pipeline.py`, `train.py`, `train_rf.py`, `predict.py`, `app.py`.

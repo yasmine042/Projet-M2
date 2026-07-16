@@ -17,7 +17,6 @@ Ce projet fournit :
 - `config.py` : configuration SQL Server, chemins de modèles et features
 - `db.py` : accès SQL Server avec SQLAlchemy + pyodbc
 - `features.py` : normalisation des données de vol et encodage métier
-- `shap_explainer.py` : support SHAP pour interprétabilité (optionnel)
 
 ## Architecture du projet
 
@@ -29,7 +28,6 @@ Ce projet fournit :
 - `config.py`
 - `db.py`
 - `features.py`
-- `shap_explainer.py`
 - `views/` : pages Streamlit (`home`, `overview`, `dashboard`, `tables`, `detection`)
 - `models/` : stockage des modèles et encodeurs
 - `logs/` : journaux d'exécution
@@ -67,12 +65,6 @@ Ce projet fournit :
 
 ```bash
 python -m pip install pandas numpy scikit-learn sqlalchemy pyodbc streamlit plotly matplotlib
-```
-
-Ajoutez les paquets optionnels si besoin :
-
-```bash
-python -m pip install shap ollama
 ```
 
 ### 2. Lancer le pipeline complet
@@ -120,4 +112,4 @@ Ce projet est distribué sous la licence MIT. Voir le fichier `LICENSE` pour les
 
 ## Contacts
 
-Ce README est généré automatiquement à partir de la structure du projet. Pour toute question, consultez les scripts principaux : `pipeline.py`, `train.py`, `train_rf.py`, `predict.py`, `app.py`, `app_streamlit.py`.
+Ce README est généré automatiquement à partir de la structure du projet. Pour toute question, consultez les scripts principaux : `pipeline.py`, `train.py`, `train_rf.py`, `predict.py`, `app.py`.
